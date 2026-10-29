@@ -6,6 +6,7 @@ import resourceRoutes from './routes/resources.js';
 import bookingRoutes from './routes/bookings.js';
 import operationRoutes from './routes/operations.js';
 import adminRoutes from './routes/admin.js';
+import trainingRoutes from './routes/training.js';
 import { env } from './config/env.js';
 import { requireOrigin } from './services/http.js';
 
@@ -25,6 +26,7 @@ app.use(requireOrigin);
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api', trainingRoutes);
 app.use('/api/resources', resourceRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api', operationRoutes);

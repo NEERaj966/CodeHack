@@ -1,5 +1,6 @@
 import { supabase, supabaseAdmin } from '../config/supabase.js';
 import { isSupabaseAdminConfigured, isSupabaseConfigured } from '../config/env.js';
+import { eligibleTrainingCodes } from '../services/training.js';
 
 const authCookie = 'cri_session';
 const administratorRole = 'administrator';
@@ -59,7 +60,7 @@ export async function requireAuth(req, res, next) {
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('profiles')
-    .select('id,email,full_name,role,account_status,department,student_year,training_codes')
+    .select('id,email,full_name,role,account_status,department,student_year,created_at')
     .eq('id', authData.user.id)
     .single();
   if (profileError) return next(profileError);
@@ -74,6 +75,13 @@ export async function requireAuth(req, res, next) {
     if (updateError) return next(updateError);
     profile.account_status = 'verified';
   }
+
+  const { data: certifications, error: certificationsError } = await supabaseAdmin
+    .from('training_certifications')
+    .select('training_code,status,training_catalog!inner(active)')
+    .eq('user_id', profile.id);
+  if (certificationsError) return next(certificationsError);
+  profile.training_codes = eligibleTrainingCodes(certifications ?? []);
 
   req.user = { auth: authData.user, profile };
   next();

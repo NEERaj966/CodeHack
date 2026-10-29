@@ -17,6 +17,9 @@ The product requirements are in [SRS v1.1 Campus Resource Intelligence.md](./SRS
 - FairShare defaults: up to two active requests, one active booking per category, eight hours per resource per week, and a 24-hour cooldown after bookings longer than four hours
 - Database-enforced booking overlap protection and booking state transitions
 - Lister-attended or self-service pickup/return with manual asset-code validation and condition reports
+- Member profile page with approved training-code catalog, private certificate-document uploads, self-service removal, and administrator review; only active, approved certifications satisfy eligibility checks
+- Resource listers choose required training codes from the approved catalog instead of entering arbitrary values
+- Administrators can add approved catalog codes, deactivate old codes, and approve/reject submitted certification documents with an audited reason
 - Resource detail pages show the current renter, availability window, schedule, waitlist, condition reports, and eligibility/certification requirements; listers can edit resource policy and details
 - Listers can review and approve waitlisted requests after an early return; the database rechecks conflicts and requires earlier overlapping waitlist requests to be handled first
 - Booking timelines grouped by resource/booking, including booking decisions, pickup/return condition reports, linked incidents, and audit events
@@ -26,7 +29,7 @@ The product requirements are in [SRS v1.1 Campus Resource Intelligence.md](./SRS
 - Prominent in-app error notices for API failures, browser runtime errors, unhandled promise rejections, and browser console errors
 - Member borrowing/lending transaction timeline and administrator audit-history endpoint; audit rows are protected against update/delete
 
-P1/P2 items such as cancellation and extension flows, team bookings, training-document review, waitlist offer claim expiry, penalty/appeal processing, utilization radar, CSV export, and online payments are not included in this P0 implementation.
+P1/P2 items such as cancellation and extension flows, team bookings, certificate-expiry tracking, waitlist offer claim expiry, penalty/appeal processing, utilization radar, CSV export, and online payments are not included in this P0 implementation.
 
 ## Stack and layout
 
@@ -49,10 +52,12 @@ P1/P2 items such as cancellation and extension flows, team bookings, training-do
 1. Create a Supabase project.
 2. In **Project Settings → API**, copy the project URL, publishable/anon key, and service-role/secret key. The service-role key is privileged and must stay in the backend environment only.
 3. Apply database migrations in filename order:
-   - For a new project, run `202610290001_initial_schema.sql`, then `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql`.
-   - If the initial migration was already applied, do **not** rerun it; run migrations `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql` in that order.
+   - For a new project, run `202610290001_initial_schema.sql`, then `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, `202610290004_waitlist_resource_details.sql`, and `202610300005_training_certifications.sql`.
+   - If the initial migration was already applied, do **not** rerun it; run migrations `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, `202610290004_waitlist_resource_details.sql`, and `202610300005_training_certifications.sql` in that order.
    - In particular, `202610290003_member_lending_model.sql` adds the `ownership_attested_by` and `ownership_attested_at` columns required to create resource listings.
    - `202610290004_waitlist_resource_details.sql` enables owner/admin decisions for waitlisted bookings after rechecking conflicts and overlapping queue order.
+   - `202610300005_training_certifications.sql` creates the administrator-managed training catalog, private certificate storage, and certification review records; it replaces the old free-form profile training-code array.
+   - Migration 005 inserts four **sample** codes. Before deployment, verify them against your institution's approved training list; administrators can add or deactivate codes in **Manage → Approved training-code catalog**.
 4. Add each participating college's authorized email domain to the database allowlist (without `@`). These ten are examples; confirm each institution's official email domain and only allow colleges participating in your deployment:
 
    ```sql
@@ -87,6 +92,12 @@ P1/P2 items such as cancellation and extension flows, team bookings, training-do
    ```
 
    The application has two roles: `member` and `administrator`. Members cannot self-assign administrator access. Use the in-app administrator controls to promote or suspend accounts; the last active administrator cannot be demoted or suspended.
+
+### Training certifications and private documents
+
+Members add training from **Profile** by selecting an active catalog code and uploading its certificate as a PDF, JPEG, or PNG (maximum 5 MB). Uploads remain private in the `member-certifications` bucket. A member can remove their own certification. An administrator reviews each pending document in **Manage → Training certificate review** and records a reason with the decision. Only approved certifications for currently active catalog codes count toward booking eligibility. Resource listers choose required training codes from that same catalog.
+
+The initial catalog entries are samples, not a claim that those training courses are institutionally approved. Verify, replace, add, or deactivate catalog entries through the administrator UI before relying on them. Certificate-expiry tracking is not implemented yet.
 
 ### Troubleshooting resource listing: `PGRST204`
 

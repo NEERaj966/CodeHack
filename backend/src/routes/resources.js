@@ -3,6 +3,7 @@ import express from 'express';
 import { supabaseAdmin } from '../config/supabase.js';
 import { isAdministrator, requireAuth } from '../middleware/auth.js';
 import { fail, sendSupabaseError, writeAudit } from '../services/http.js';
+import { normalizeTrainingCode } from '../services/training.js';
 
 const router = express.Router();
 const categories = ['laboratory', 'IT', 'sports', 'facilities', 'event_equipment'];
@@ -41,7 +42,8 @@ function validateResource(body, creating = false) {
     return 'Eligibility allowed_departments must be an array of names.';
   }
   if (rules.required_training !== undefined
-      && (!Array.isArray(rules.required_training) || rules.required_training.some((value) => typeof value !== 'string'))) {
+      && (!Array.isArray(rules.required_training)
+        || rules.required_training.some((value) => typeof value !== 'string' || !value.trim()))) {
     return 'Eligibility required_training must be an array of codes.';
   }
   if (rules.minimum_year !== undefined
@@ -52,6 +54,32 @@ function validateResource(body, creating = false) {
   if (body.restricted && body.handover_mode === 'self_service') return 'Restricted resources must use staff-attended handover.';
   if (body.high_value && body.handover_mode === 'self_service') return 'High-value resources must use staff-attended handover.';
   return null;
+}
+
+async function validateTrainingCatalogCodes(res, rules = {}, previouslyConfigured = []) {
+  const codes = rules.required_training ?? [];
+  if (!codes.length) return true;
+  const normalizedCodes = codes.map(normalizeTrainingCode);
+  const { data, error } = await supabaseAdmin
+    .from('training_catalog')
+    .select('code,active')
+    .in('code', normalizedCodes);
+  if (error) {
+    sendSupabaseError(res, error);
+    return false;
+  }
+  const catalogEntries = new Map((data ?? []).map((row) => [row.code, row]));
+  const preservedCodes = new Set(
+    (Array.isArray(previouslyConfigured) ? previouslyConfigured : []).map(normalizeTrainingCode),
+  );
+  const invalidCodes = normalizedCodes.filter((code) => (
+    (!catalogEntries.has(code) || !catalogEntries.get(code).active) && !preservedCodes.has(code)
+  ));
+  if (invalidCodes.length) {
+    fail(res, 400, `Choose active required training codes from the approved catalog. Invalid: ${invalidCodes.join(', ')}.`);
+    return false;
+  }
+  return true;
 }
 
 router.get('/', async (req, res) => {
@@ -232,6 +260,10 @@ router.post('/', requireAuth, async (req, res) => {
   const issue = validateResource(req.body ?? {}, true);
   if (issue) return fail(res, 400, issue);
   const body = req.body;
+  if (await validateTrainingCatalogCodes(res, body.eligibility_rules ?? {}) !== true) return;
+  if (body.eligibility_rules?.required_training) {
+    body.eligibility_rules.required_training = body.eligibility_rules.required_training.map(normalizeTrainingCode);
+  }
   if (body.institutional_ownership_confirmed !== true) {
     return fail(res, 400, 'Confirm that you are authorized to list this college-owned resource.');
   }
@@ -310,10 +342,19 @@ router.patch('/:id', requireAuth, requireResourceOwnerOrAdmin, async (req, res) 
   if (!Object.keys(update).length) return fail(res, 400, 'No supported resource fields were supplied.');
   const { data: currentResource, error: currentResourceError } = await supabaseAdmin
     .from('resources')
-    .select('restricted,high_value,approval_mode,handover_mode')
+    .select('restricted,high_value,approval_mode,handover_mode,eligibility_rules')
     .eq('id', req.params.id)
     .single();
   if (currentResourceError) return sendSupabaseError(res, currentResourceError);
+  if (req.body?.eligibility_rules !== undefined
+      && await validateTrainingCatalogCodes(
+        res,
+        req.body.eligibility_rules,
+        currentResource.eligibility_rules?.required_training ?? [],
+      ) !== true) return;
+  if (req.body?.eligibility_rules?.required_training) {
+    req.body.eligibility_rules.required_training = req.body.eligibility_rules.required_training.map(normalizeTrainingCode);
+  }
   const restricted = update.restricted ?? currentResource.restricted;
   const highValue = update.high_value ?? currentResource.high_value;
   const approvalMode = update.approval_mode ?? currentResource.approval_mode;

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test tests/eligibility.test.js tests/auth-registration.test.js tests/http.test.js",
+    "test": "node --test tests/eligibility.test.js tests/auth-registration.test.js tests/http.test.js tests/training.test.js",
     "test:sanity": "node tests/sanity.test.js"
   },
   "devDependencies": {

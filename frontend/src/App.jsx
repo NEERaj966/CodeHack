@@ -79,6 +79,12 @@ function App() {
   const [notificationFilter, setNotificationFilter] = useState('all')
   const [adminUsers, setAdminUsers] = useState([])
   const [adminIncidents, setAdminIncidents] = useState([])
+  const [adminTrainingCertifications, setAdminTrainingCertifications] = useState([])
+  const [trainingCatalog, setTrainingCatalog] = useState([])
+  const [profileData, setProfileData] = useState(null)
+  const [certificateCode, setCertificateCode] = useState('')
+  const [certificateFile, setCertificateFile] = useState(null)
+  const [trainingCodeForm, setTrainingCodeForm] = useState({ code: '', title: '', description: '' })
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
   const [location, setLocation] = useState('')
@@ -98,7 +104,7 @@ function App() {
     name: '', asset_code: '', description: '', category: 'IT', resource_type: 'equipment',
     location: '', department: '', institution: '', approval_mode: 'manual',
     handover_mode: 'staff_attended', restricted: false, usage_terms: '',
-    allowed_departments: '', minimum_year: '', required_training: '', available_from: '', available_until: '',
+    allowed_departments: '', minimum_year: '', required_training: [], available_from: '', available_until: '',
   })
   const [incidentForm, setIncidentForm] = useState({ booking_id: '', resource_id: '', kind: 'damage', description: '' })
   const lastConsoleError = useRef({ detail: '', timestamp: 0 })
@@ -165,28 +171,35 @@ function App() {
 
   const loadPrivateData = useCallback(async () => {
     if (!user) return
-    const [bookingResult, timelineResult, dashboardResult, notificationResult, myResourcesResult] = await Promise.all([
+    const [bookingResult, timelineResult, dashboardResult, notificationResult, myResourcesResult, profileResult, trainingCodesResult] = await Promise.all([
       api('/bookings'),
       api('/timeline'),
       api('/dashboard'),
       api('/notifications'),
       api('/resources/mine'),
+      api('/profile'),
+      api('/training-codes'),
     ])
     setBookings(bookingResult.data)
     setMyResources(myResourcesResult.data)
     setTimeline(timelineResult.data)
     setDashboard(dashboardResult.data)
     setNotifications(notificationResult.data)
+    setProfileData(profileResult.data)
+    setTrainingCatalog(trainingCodesResult.data)
     if (isAdmin) {
-      const [usersResult, incidentsResult] = await Promise.all([
+      const [usersResult, incidentsResult, certificationsResult] = await Promise.all([
         api('/admin/users'),
         api('/admin/incidents'),
+        api('/admin/training-certifications'),
       ])
       setAdminUsers(usersResult.data)
       setAdminIncidents(incidentsResult.data)
+      setAdminTrainingCertifications(certificationsResult.data)
     } else {
       setAdminUsers([])
       setAdminIncidents([])
+      setAdminTrainingCertifications([])
     }
   }, [isAdmin, user])
 
@@ -359,6 +372,12 @@ function App() {
     try {
       await api('/auth/logout', { method: 'POST' })
       setUser(null)
+      setProfileData(null)
+      setTrainingCatalog([])
+      setAdminTrainingCertifications([])
+      setAdminUsers([])
+      setAdminIncidents([])
+      setActiveTab('resources')
       setBookings([])
       setTimeline([])
       setNotifications([])
@@ -405,7 +424,7 @@ function App() {
     try {
       const eligibility_rules = {
         allowed_departments: resourceForm.allowed_departments.split(',').map((item) => item.trim()).filter(Boolean),
-        required_training: resourceForm.required_training.split(',').map((item) => item.trim()).filter(Boolean),
+        required_training: resourceForm.required_training,
         ...(resourceForm.minimum_year ? { minimum_year: Number(resourceForm.minimum_year) } : {}),
       }
       const excludedFields = ['allowed_departments', 'required_training', 'minimum_year']
@@ -431,7 +450,7 @@ function App() {
         name: '', asset_code: '', description: '', category: 'IT', resource_type: 'equipment',
         location: '', department: '', institution: '', approval_mode: 'manual',
         handover_mode: 'staff_attended', restricted: false, usage_terms: '',
-        allowed_departments: '', minimum_year: '', required_training: '', available_from: '', available_until: '',
+        allowed_departments: '', minimum_year: '', required_training: [], available_from: '', available_until: '',
       })
       await refresh()
     } catch (requestError) {
@@ -493,7 +512,7 @@ function App() {
       available_until: toLocalDateTime(resource.available_until),
       allowed_departments: (resource.eligibility_rules?.allowed_departments ?? []).join(', '),
       minimum_year: resource.eligibility_rules?.minimum_year ?? '',
-      required_training: (resource.eligibility_rules?.required_training ?? []).join(', '),
+      required_training: resource.eligibility_rules?.required_training ?? [],
     })
     setEditingResourceDetails(true)
   }
@@ -503,7 +522,7 @@ function App() {
     if (!resourceDetails || !resourceEditForm) return
     const eligibility_rules = {
       allowed_departments: resourceEditForm.allowed_departments.split(',').map((item) => item.trim()).filter(Boolean),
-      required_training: resourceEditForm.required_training.split(',').map((item) => item.trim()).filter(Boolean),
+      required_training: resourceEditForm.required_training,
       ...(resourceEditForm.minimum_year ? { minimum_year: Number(resourceEditForm.minimum_year) } : {}),
     }
     const body = {
@@ -649,6 +668,103 @@ function App() {
     }
   }
 
+  async function submitTrainingCertificate(event) {
+    event.preventDefault()
+    const form = event.currentTarget
+    if (!certificateCode || !certificateFile) {
+      setError('Choose an approved training code and attach its certificate document.')
+      return
+    }
+    try {
+      await api('/profile/certifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': certificateFile.type,
+          'X-Training-Code': certificateCode,
+        },
+        body: certificateFile,
+      })
+      setCertificateCode('')
+      setCertificateFile(null)
+      form.reset()
+      setMessage('Certificate submitted. It will count toward eligibility after an administrator approves it.')
+      await refresh()
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function removeTrainingCertificate(certification) {
+    if (!window.confirm(`Remove your ${certification.training_code} certification and its uploaded document?`)) return
+    try {
+      const response = await api(`/profile/certifications/${certification.id}`, { method: 'DELETE' })
+      setMessage(response.message)
+      await refresh()
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function openTrainingDocument(certificationId) {
+    const newWindow = window.open('about:blank', '_blank')
+    if (!newWindow) {
+      setError('Allow pop-ups to open this private certificate document.')
+      return
+    }
+    try {
+      const response = await api(`/profile/certifications/${certificationId}/document`)
+      newWindow.opener = null
+      newWindow.location = response.url
+    } catch (requestError) {
+      newWindow.close()
+      setError(requestError.message)
+    }
+  }
+
+  async function reviewTrainingCertification(certification, status) {
+    const reason = window.prompt(`Reason for marking ${certification.training_code} ${status}:`)
+    if (!reason?.trim()) return
+    try {
+      await api(`/admin/training-certifications/${certification.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, reason }),
+      })
+      setAdminTrainingCertifications((current) => current.filter((item) => item.id !== certification.id))
+      setMessage(`Certification ${status}; the member has been notified.`)
+      await refresh()
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function addTrainingCode(event) {
+    event.preventDefault()
+    try {
+      const response = await api('/admin/training-codes', {
+        method: 'POST',
+        body: JSON.stringify(trainingCodeForm),
+      })
+      setTrainingCatalog((current) => [...current, response.data].sort((a, b) => a.title.localeCompare(b.title)))
+      setTrainingCodeForm({ code: '', title: '', description: '' })
+      setMessage(`Approved training code ${response.data.code} added to the catalog.`)
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function setTrainingCodeActive(code, active) {
+    try {
+      const response = await api(`/admin/training-codes/${encodeURIComponent(code)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ active }),
+      })
+      setTrainingCatalog((current) => current.map((item) => item.code === code ? response.data : item))
+      setMessage(`${code} ${active ? 'activated' : 'deactivated'}.`)
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -717,13 +833,95 @@ function App() {
             <div><strong>{notifications.filter((item) => !item.read_at).length}</strong><span>unread notifications</span></div>
           </section>
           <nav className="tab-bar" aria-label="Dashboard sections">
-            {['resources', 'bookings', 'timeline', 'manage'].map((tab) => (
+            {['resources', 'bookings', 'timeline', 'manage', 'profile'].map((tab) => (
               <button key={tab} type="button" className={activeTab === tab ? 'selected' : ''} onClick={() => setActiveTab(tab)}>
                 {tab[0].toUpperCase() + tab.slice(1)}
               </button>
             ))}
             <button type="button" className="refresh-btn" onClick={refresh}>Refresh</button>
           </nav>
+
+          {activeTab === 'profile' ? (
+            <section className="content-section">
+              <div className="section-heading">
+                <div><p className="eyebrow">Your account</p><h2>Profile</h2></div>
+              </div>
+              <section className="profile-summary">
+                <div className="profile-summary-heading">
+                  <div><h3>{profileData?.profile.full_name}</h3><p>{profileData?.profile.email}</p></div>
+                  <span className={`status-chip status-${profileData?.profile.account_status}`}>{profileData?.profile.account_status}</span>
+                </div>
+                <dl className="profile-facts">
+                  <div><dt>Role</dt><dd>{profileData?.profile.role}</dd></div>
+                  <div><dt>College email domain</dt><dd>{profileData?.profile.email.split('@').at(-1)}</dd></div>
+                  <div><dt>Department</dt><dd>{profileData?.profile.department || 'Not provided'}</dd></div>
+                  <div><dt>Study year</dt><dd>{profileData?.profile.student_year || 'Not provided'}</dd></div>
+                  <div><dt>Member since</dt><dd>{profileData?.profile.created_at ? new Date(profileData.profile.created_at).toLocaleDateString() : '—'}</dd></div>
+                </dl>
+              </section>
+
+              <section className="profile-certifications">
+                <div className="booking-group-heading">
+                  <div><p className="eyebrow">Approved training catalog</p><h3>My certifications</h3></div>
+                  <span>{profileData?.certifications.length ?? 0}</span>
+                </div>
+                <p className="helper-text">Select an approved code and upload proof. A certification only satisfies resource eligibility after an administrator verifies the document.</p>
+                <form className="form-stack certificate-form" onSubmit={submitTrainingCertificate}>
+                  <label>Training code
+                    <select required value={certificateCode} onChange={(event) => setCertificateCode(event.target.value)}>
+                      <option value="">Choose an approved code</option>
+                      {trainingCatalog.filter((item) => item.active).map((item) => (
+                        <option
+                          key={item.code}
+                          value={item.code}
+                          disabled={profileData?.certifications.some((certification) => certification.training_code === item.code)}
+                        >
+                          {item.code} — {item.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>Certificate document (PDF, JPEG, or PNG; max 5 MB)
+                    <input
+                      required
+                      type="file"
+                      accept="application/pdf,image/jpeg,image/png"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] ?? null
+                        if (file && file.size > 5 * 1024 * 1024) {
+                          setCertificateFile(null)
+                          setError('Certificate documents must be no larger than 5 MB.')
+                          event.target.value = ''
+                          return
+                        }
+                        setCertificateFile(file)
+                      }}
+                    />
+                  </label>
+                  <button className="primary-btn" type="submit" disabled={!trainingCatalog.some((item) => item.active)}>Submit for verification</button>
+                </form>
+                {profileData?.certifications.length ? (
+                  <div className="certification-list">
+                    {profileData.certifications.map((certification) => (
+                      <article className="certification-row" key={certification.id}>
+                        <div>
+                          <strong>{certification.training_code} · {certification.training_catalog?.title}</strong>
+                          {!certification.training_catalog?.active ? <small>This training code is inactive and does not currently count toward eligibility.</small> : null}
+                          <p>Submitted {new Date(certification.created_at).toLocaleString()}</p>
+                          {certification.review_reason ? <small>{certification.review_reason}</small> : null}
+                        </div>
+                        <span className={`status-chip status-${certification.status}`}>{certification.status}</span>
+                        <div className="card-actions">
+                          <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}>View document</button>
+                          <button className="reject-btn" type="button" onClick={() => removeTrainingCertificate(certification)}>Remove</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : <p className="empty-state">No certifications added yet.</p>}
+              </section>
+            </section>
+          ) : null}
 
           {activeTab === 'resources' ? (
             <section className="content-section">
@@ -953,8 +1151,26 @@ function App() {
                   <label>Eligible departments (comma-separated)<input value={resourceForm.allowed_departments} onChange={(event) => setResourceForm({ ...resourceForm, allowed_departments: event.target.value })} /></label>
                   <div className="form-row">
                     <label>Minimum study year<input type="number" min="1" max="10" value={resourceForm.minimum_year} onChange={(event) => setResourceForm({ ...resourceForm, minimum_year: event.target.value })} /></label>
-                    <label>Required training codes<input value={resourceForm.required_training} onChange={(event) => setResourceForm({ ...resourceForm, required_training: event.target.value })} placeholder="e.g. LAB-101, SAFETY-1" /></label>
                   </div>
+                  <fieldset className="training-code-picker">
+                    <legend>Required approved training codes</legend>
+                    {trainingCatalog.filter((item) => item.active).map((item) => (
+                      <label className="check-label" key={item.code}>
+                        <input
+                          type="checkbox"
+                          checked={resourceForm.required_training.includes(item.code)}
+                          onChange={(event) => setResourceForm({
+                            ...resourceForm,
+                            required_training: event.target.checked
+                              ? [...resourceForm.required_training, item.code]
+                              : resourceForm.required_training.filter((code) => code !== item.code),
+                          })}
+                        />
+                        {item.code} — {item.title}
+                      </label>
+                    ))}
+                    {!trainingCatalog.some((item) => item.active) ? <p className="helper-text">There are no approved training codes in the catalog.</p> : null}
+                  </fieldset>
                   <label>Usage terms<input value={resourceForm.usage_terms} onChange={(event) => setResourceForm({ ...resourceForm, usage_terms: event.target.value })} /></label>
                   <button className="primary-btn" type="submit">List resource</button>
                 </form>
@@ -981,6 +1197,41 @@ function App() {
                           <select aria-label={`Account status for ${profile.email}`} value={profile.account_status} onChange={(event) => updateAdminUser(profile, { account_status: event.target.value })}>
                             {['unverified', 'verified', 'suspended'].map((status) => <option key={status} value={status}>{status}</option>)}
                           </select>
+                        </article>
+                      ))}
+                    </div>
+                    <h3>Training certificate review</h3>
+                    <div className="admin-list">
+                      {adminTrainingCertifications.map((certification) => (
+                        <article className="certification-row" key={certification.id}>
+                          <div>
+                            <strong>{certification.training_code} · {certification.training_catalog?.title}</strong>
+                            <p>{certification.profiles?.full_name} · {certification.profiles?.email}</p>
+                            <small>Submitted {new Date(certification.created_at).toLocaleString()}</small>
+                          </div>
+                          <div className="card-actions">
+                            <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}>Review document</button>
+                            <button className="approve-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'approved')}>Approve</button>
+                            <button className="reject-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'rejected')}>Reject</button>
+                          </div>
+                        </article>
+                      ))}
+                      {!adminTrainingCertifications.length ? <p className="empty-state">No training certificates are waiting for review.</p> : null}
+                    </div>
+                    <h3>Approved training-code catalog</h3>
+                    <p className="helper-text">Members can choose active codes only. The initial migration entries are samples; confirm them against your college's approved training list.</p>
+                    <form className="form-stack training-code-admin-form" onSubmit={addTrainingCode}>
+                      <label>Code<input required pattern="[A-Za-z0-9][A-Za-z0-9._-]{1,39}" value={trainingCodeForm.code} onChange={(event) => setTrainingCodeForm({ ...trainingCodeForm, code: event.target.value })} placeholder="e.g. LASER-SAFETY-101" /></label>
+                      <label>Title<input required minLength="2" maxLength="120" value={trainingCodeForm.title} onChange={(event) => setTrainingCodeForm({ ...trainingCodeForm, title: event.target.value })} /></label>
+                      <label>Description<textarea maxLength="1000" value={trainingCodeForm.description} onChange={(event) => setTrainingCodeForm({ ...trainingCodeForm, description: event.target.value })} /></label>
+                      <button className="secondary-btn" type="submit">Add approved code</button>
+                    </form>
+                    <div className="admin-list">
+                      {trainingCatalog.map((item) => (
+                        <article className="admin-row" key={item.code}>
+                          <div><strong>{item.code} · {item.title}</strong><p>{item.description || 'No description'}</p></div>
+                          <span className={`status-chip status-${item.active ? 'available' : 'unavailable'}`}>{item.active ? 'active' : 'inactive'}</span>
+                          <button className="secondary-btn" type="button" onClick={() => setTrainingCodeActive(item.code, !item.active)}>{item.active ? 'Deactivate' : 'Activate'}</button>
                         </article>
                       ))}
                     </div>
@@ -1075,8 +1326,31 @@ function App() {
                     <label>Eligible departments (comma-separated)<input value={resourceEditForm.allowed_departments} onChange={(event) => setResourceEditForm({ ...resourceEditForm, allowed_departments: event.target.value })} /></label>
                     <div className="form-row">
                       <label>Minimum study year<input type="number" min="1" max="10" value={resourceEditForm.minimum_year} onChange={(event) => setResourceEditForm({ ...resourceEditForm, minimum_year: event.target.value })} /></label>
-                      <label>Required training/certifications<input value={resourceEditForm.required_training} onChange={(event) => setResourceEditForm({ ...resourceEditForm, required_training: event.target.value })} placeholder="e.g. LAB-101, SAFETY-1" /></label>
                     </div>
+                    <fieldset className="training-code-picker">
+                      <legend>Required approved training codes</legend>
+                      {[
+                        ...trainingCatalog,
+                        ...resourceEditForm.required_training
+                          .filter((code) => !trainingCatalog.some((item) => item.code === code))
+                          .map((code) => ({ code, title: 'Legacy code not in approved catalog', active: false })),
+                      ].map((item) => (
+                        <label className="check-label" key={item.code}>
+                          <input
+                            type="checkbox"
+                            checked={resourceEditForm.required_training.includes(item.code)}
+                            onChange={(event) => setResourceEditForm({
+                              ...resourceEditForm,
+                              required_training: event.target.checked
+                                ? [...resourceEditForm.required_training, item.code]
+                                : resourceEditForm.required_training.filter((code) => code !== item.code),
+                            })}
+                          />
+                          {item.code} — {item.title}{item.active ? '' : ' (inactive)'}
+                        </label>
+                      ))}
+                      {!trainingCatalog.length ? <p className="helper-text">No catalog codes are available.</p> : null}
+                    </fieldset>
                     <label>Usage and condition terms<textarea value={resourceEditForm.usage_terms} onChange={(event) => setResourceEditForm({ ...resourceEditForm, usage_terms: event.target.value })} /></label>
                     <label className="check-label"><input type="checkbox" checked={resourceEditForm.restricted} onChange={(event) => setResourceEditForm({
                       ...resourceEditForm,

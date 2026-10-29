@@ -26,6 +26,8 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 - [x] Manual asset-ID pickup/return and timestamped condition reports.
 - [x] Early return releases an in-use resource immediately; listers/admins can review and decide waitlisted requests from the resource detail view, with overlap and queue-order checks in Postgres.
 - [x] Resource detail view shows availability, current renter, schedule, waitlist, condition reports, and eligibility/certification requirements; listers/admins can edit resource details and policy.
+- [x] Profile shows account details and supports certificate uploads for active catalog training codes; administrators review submissions, and only approved active codes satisfy backend eligibility (FR-025 and FR-114).
+- [x] Resource listing and editing choose required training codes from the catalog rather than accepting arbitrary code text.
 - [x] Transaction timelines grouped per booking/resource, plus explicit return guidance when a lister-attended handover is required.
 - [x] Notification read/unread state can be filtered and toggled in the UI.
 - [x] Incident reporting and administrator review/status handling without automatic fault or penalty decisions.
@@ -40,14 +42,14 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 - [ ] Configure Supabase Auth email confirmation and the local redirect URL.
 - [ ] Register and verify an account, then promote the first administrator using the bootstrap SQL in `README.md`.
 - [ ] Confirm `GET /api/health/ready` reports ready.
-- [ ] Apply `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql` in order before using the member-lending and waitlist-management features.
+- [ ] Apply `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, `202610290004_waitlist_resource_details.sql`, and `202610300005_training_certifications.sql` in order before using member lending, waitlist management, and certifications.
 - [ ] Exercise signup/sign-in, resource creation/discovery, eligibility, approval, overlap conflict, early pickup/return, waitlist decisions, incident, notification, and audit flows against Supabase.
 - [ ] Record integration results and resolve any migration, authorization, storage, or workflow findings.
 
 ## P1 checklist
 
 - [ ] Cancellations and booking extensions.
-- [ ] Training document review and expiry tracking.
+- [ ] Certificate expiry dates and renewal reminders (FR-115).
 - [ ] No-show handling and waitlist claim windows.
 - [ ] QR scanning or booking-specific handover tokens; manual asset-ID handover is implemented for P0.
 - [ ] Team bookings and manager assignment UI.
@@ -62,7 +64,7 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 
 ## Validation status
 
-- Backend unit tests: passed (9 tests covering registration errors, eligibility, authorization, and HTTP/Supabase error handling).
+- Backend unit tests: passed (12 tests covering registration errors, eligibility, authorization, HTTP/Supabase error handling, training-code validation, and certificate file signatures).
 - Backend HTTP sanity test: passed (liveness; database reports `not_configured` in this environment).
 - Frontend lint: passed without warnings.
 - Frontend production build sanity test: passed.
@@ -70,7 +72,7 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 
 ## Next milestone
 
-Apply the role-model and waitlist migrations to Supabase, verify the P0 member-to-member lending and borrowing journey—including early return, waitlist decisions, and resource editing—end to end, and record the results here before beginning P1 work.
+Apply the role-model, waitlist, and training migrations to Supabase; verify the member-to-member lending and borrowing journey plus certification upload/review against Supabase; record the results here before beginning other P1 work.
 
 ## Multi-college/member-lending scope note
 
