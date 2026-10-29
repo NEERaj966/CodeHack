@@ -1,0 +1,13 @@
+{
+  // 1. Automatically accept file edits without manual Keep / Undo review
+  "chat.editing.autoAcceptDelay": 0,
+
+  // 2. Automatically approve built-in and MCP tool executions
+  "chat.tools.global.autoApprove": true,
+  "chat.permissions.default": "autoApprove",
+
+  // 3. Prevent prompts when executing terminal commands
+  "chat.tools.terminal.enableAutoApprove": true,
+
+  // 4. Increase max agent iteration turns before it pauses to ask to continue
+  "chat.agent.maxRequests": 100

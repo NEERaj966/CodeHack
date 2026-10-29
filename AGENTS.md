@@ -8,31 +8,30 @@ The project implements a college resource-sharing platform for equipment, facili
 
 ## Mission
 
-Build a single-college prototype that supports:
-- student discovery and booking of college-owned resources
-- resource ownership and approval by authorized staff
+Build a collaborative prototype for verified members from participating colleges that supports:
+- member discovery and booking of college-owned resources
+- member lending of institution-owned resources they are authorized to share
+- approval by the resource lister, with global administration by an administrator
 - FairShare allocation and waitlists
-- QR/token-based handover and condition reporting
+- Manual-ID-based handover and condition reporting
 - maintenance, incidents, penalties, and appeals
-- utilization analytics and audit logs
+- audit logs
 
 ## Core constraints from the SRS
 
-1. Only authorized college personnel may register institutional resources.
-2. Students cannot list, rent out, or sell personal belongings.
+1. Members may list only institution-owned resources they are authorized to share and must attest to that authority.
+2. Members cannot list, rent out, or sell personal belongings.
 3. Backend enforcement is mandatory for all access control, validation, and business logic.
 4. Restricted resources must follow manual approval rules.
 5. No overlapping confirmed bookings for the same tracked resource.
 6. Audit records are append-only and cannot be modified by ordinary users.
 7. Evidence, condition photos, and personal data must stay protected.
-8. The prototype is for a single college; multi-college support is out of scope.
+8. Member registration is limited to explicitly approved participating-college email domains; domain allowlisting alone is not tenant isolation.
 
 ## Role model
 
-- Student: can search, request, cancel, waitlist, confirm handover, appeal, and view own history.
-- Resource Manager: manages assigned resources and requests.
-- Department Owner: manages department policy and approvals.
-- Administrator: configures college-wide policy and account roles.
+- Member: can list authorized institutional resources, borrow from other members, approve requests on their own listings, record permitted handovers/returns, report incidents, and view relevant history.
+- Administrator: manages accounts, all resources, incident statuses, and audit history.
 
 ## Functional priority guide
 
@@ -47,16 +46,17 @@ The minimum build should cover the full core booking lifecycle:
 - discovery and search
 - booking request + approval workflow
 - FairShare allocation and waitlist
-- QR/token pickup/return
+- manual asset-ID pickup/return
 - condition report and incident handling
 - notifications and audit trail
-- basic utilization reporting
+
+Utilization analytics, QR/token handover, teams, appeals, and advanced fairness are later priorities in the SRS, not P0 acceptance requirements.
 
 ## Architecture expectations
 
 ### Frontend
 - React + Vite + Tailwind CSS
-- student and staff views
+- member and administrator views
 - role-based UI gating
 - mobile-friendly responsive design
 
@@ -68,7 +68,7 @@ The minimum build should cover the full core booking lifecycle:
 - job scheduler for reminders and expiries
 
 ### Data layer
-- MongoDB as the primary persistence layer
+- Supabase Postgres as the primary persistence layer
 - append-only audit collection
 - resource and booking records with history retention
 - conditional validation for overlaps, no-shows, and conflict handling
@@ -90,7 +90,7 @@ When building the product:
 - Preserve the SRS terminology and IDs where possible.
 - Map features to relevant FR/NFR requirements.
 - Prioritize prototype reliability over broad feature breadth.
-- Keep the UI simple, explainable, and clear for students and staff.
+- Keep the UI simple, explainable, and clear for members and administrators.
 - Keep documentation updated as features are implemented.
 
 ## Repository conventions
@@ -99,17 +99,20 @@ When building the product:
 - `backend/` contains the application implementation.
 - Keep implementation aligned with the SRS, especially for role permissions, booking logic, and audit integrity.
 
+## P0 implementation status
+
+The P0-oriented app workflows are implemented. The remaining P0 release gate is external Supabase setup and end-to-end verification, described in `progress.md` and `README.md`.
+
 ## Suggested execution order
 
-1. Setup project structure and environment.
-2. Implement authentication and role-based access.
-3. Add resource registration and eligibility configuration.
-4. Build search, booking, and FairShare logic.
-5. Implement handover, condition reports, and incidents.
-6. Add notifications and scheduled jobs.
-7. Complete analytics and audit reporting.
-8. Validate against the MVP requirement set from the SRS.
+1. Apply the Supabase migration and configure participating-college domains.
+2. Verify signup, email confirmation, and first-admin bootstrap.
+3. Exercise member resource listing, discovery, eligibility, and lister approval.
+4. Exercise pickup, condition report, return, incident, notification, and audit timeline.
+5. Fix integration findings, then move to P1 requirements.
+
+Project-local plan/execute/verify guidance is in `.agents/`.
 
 ## Important note
 
-This project is a prototype for a 48-hour build, so broad multi-college or AI-heavy features are intentionally out of scope unless specifically approved later.
+This project is a prototype for a 48-hour build. Cross-college registration and member-to-member institutional resource sharing are in scope. Tenant-scoped data isolation and AI-heavy features remain out of scope. College-domain verification does not itself prove a member's authority to share a particular institutional asset; the product records the member's attestation and gives administrators global moderation access.

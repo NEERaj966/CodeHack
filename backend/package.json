@@ -1,20 +1,25 @@
 {
-  "name": "backend",
+  "name": "campus-resource-intelligence-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Campus Resource Intelligence backend service",
   "license": "ISC",
   "author": "",
   "type": "module",
-  "main": "index.js",
+  "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test tests/eligibility.test.js tests/auth-registration.test.js tests/http.test.js",
+    "test:sanity": "node tests/sanity.test.js"
   },
   "devDependencies": {
-    "nodeman": "^1.1.2"
+    "nodemon": "^3.1.14"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
     "express": "^5.3.0"
   }
 }
