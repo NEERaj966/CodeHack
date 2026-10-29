@@ -1,0 +1,78 @@
+# Campus Resource Intelligence - Project Requirements
+
+## Overview
+This project implements a campus resource-sharing platform for college-owned equipment, labs, classrooms, and facilities. The system is built from the SRS v1.1 document and focuses on a single-college prototype with strong governance and traceability.
+
+## Core product requirements
+
+### Functional requirements summary
+- User registration with college email verification
+- Role-based access for student, resource manager, department owner, and administrator
+- Resource inventory management by authorized staff
+- Search and discovery for campus resources
+- Eligibility checks, training verification, and supervisor approval rules
+- Booking request workflow with approval, rejection, cancellation, extension, and waitlist
+- FairShare allocation with limits, priority logic, and explanation text
+- QR/token-based pickup and return
+- Condition reporting at pickup and return with dual acknowledgment
+- Incident, maintenance, penalty, and appeal handling
+- In-app notifications and reminder scheduling
+- Resource utilization analytics and demand intelligence
+- Append-only audit logging
+
+### Priority focus
+- P0 (mandatory for MVP): account/auth, resource registration, eligibility, booking flow, approval logic, no-conflict reservations, audit trail, handover flow, condition reports, notifications, basic reporting
+- P1 (important): teams, training documents, no-show handling, maintenance conflict workflow, deposits, fairness monitoring
+- P2 (optional/stretch): AI matching, advanced analytics, CSV export, fee integration
+
+## Non-functional requirements summary
+- API responses for standard operations must complete within 2 seconds under prototype load
+- Production must use HTTPS
+- Passwords must be hashed securely with bcrypt or argon2
+- Authorization must be enforced by the backend for every sensitive operation
+- Input validation must defend against injection, XSS, and CSRF issues
+- Uploads must be validated for type, size, and access rights
+- Image/evidence storage must use authenticated or signed URLs
+- Audit log must be append-only
+- Booking conflict prevention must work under concurrent requests
+- UI must be responsive and accessible (WCAG 2.1 AA target)
+- Secrets/configuration must use environment variables
+- Privacy rules must protect personal and evidence data
+
+## Technology stack
+- Frontend: React + Vite + Tailwind CSS
+- Backend: Node.js + Express
+- Database: MongoDB (replica set or managed service recommended)
+- Authentication: sessions or JWT stored in HTTP-only cookies
+- Image storage: Cloudinary or equivalent authenticated storage
+- Notifications: in-app, optional email
+- Scheduler: node-cron, Agenda, or BullMQ
+- QR support: QR generation and browser scanning with manual fallback
+
+## Environment requirements
+- Node.js 18+
+- npm 9+
+- MongoDB instance or Atlas-compatible cluster
+- HTTPS-enabled deployment environment
+- Email service for verification and notifications
+- Cloud storage for uploaded images/evidence
+- Access to a scheduler process for reminders and expiry jobs
+
+## Operational constraints
+- Only authorized staff can create and manage institutional resources
+- Students cannot register, list, or sell personal items
+- All permission decisions must be enforced on the server
+- No automatic penalty or fault assignment from an incident alone
+- Self-registration is restricted to student accounts only
+- Staff/admin roles must only be assigned by administrators
+
+## Success criteria
+- A judge can complete a resource request lifecycle without manual database changes
+- Every approval/rejection/waitlist decision shows a clear reason
+- Overlapping confirmed bookings are impossible
+- Handover, return, and condition records remain traceable and reviewable
+- Utilization and demand reports are generated from actual activity data
+
+## Notes
+- This is a single-college prototype and does not include multi-college support.
+- Online payment, AI advice, and advanced institutional extensions are out of scope for the mandatory MVP.
