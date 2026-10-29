@@ -21,7 +21,10 @@ test('allows a verified member profile that meets resource eligibility rules', (
 test('explains department, year, and training eligibility failures', () => {
   assert.match(getEligibilityFailure({ ...member, department: 'Arts' }, {
     eligibility_rules: { allowed_departments: ['Engineering'] },
-  }), /approved departments/);
+  }), /restricted to these departments: Engineering/);
+  assert.match(getEligibilityFailure({ ...member, department: null }, {
+    eligibility_rules: { allowed_departments: ['Engineering', 'Science'] },
+  }), /Engineering, Science/);
   assert.match(getEligibilityFailure({ ...member, student_year: 1 }, {
     eligibility_rules: { minimum_year: 2 },
   }), /year 2/);

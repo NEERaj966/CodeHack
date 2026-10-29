@@ -28,6 +28,7 @@ function validateResource(body, creating = false) {
   if (body.status !== undefined && !resourceStatuses.includes(body.status)) return 'Unsupported resource status.';
   if (body.approval_mode !== undefined && !approvalModes.includes(body.approval_mode)) return 'Unsupported approval mode.';
   if (body.handover_mode !== undefined && !handoverModes.includes(body.handover_mode)) return 'Unsupported handover mode.';
+  if (body.active !== undefined && typeof body.active !== 'boolean') return 'active must be true or false.';
   if (body.restricted !== undefined && typeof body.restricted !== 'boolean') return 'restricted must be true or false.';
   if (body.high_value !== undefined && typeof body.high_value !== 'boolean') return 'high_value must be true or false.';
   if (body.eligibility_rules !== undefined
@@ -114,6 +115,99 @@ router.get('/', async (req, res) => {
   }
 
   res.json({ success: true, data: resources, page, limit, total: count ?? 0 });
+});
+
+router.get('/mine', requireAuth, async (req, res) => {
+  if (!supabaseAdmin) return dbUnavailable(res);
+  const { data, error } = await supabaseAdmin
+    .from('resources')
+    .select('id,asset_code,name,category,resource_type,location,status,approval_mode,created_at')
+    .eq('created_by', req.user.profile.id)
+    .order('created_at', { ascending: false });
+  if (error) return sendSupabaseError(res, error);
+  res.json({ success: true, data });
+});
+
+router.get('/:id/details', requireAuth, async (req, res) => {
+  if (!supabaseAdmin) return dbUnavailable(res);
+  const { data: resource, error: resourceError } = await supabaseAdmin
+    .from('resources')
+    .select('*,lister:profiles!resources_created_by_fkey(id,full_name)')
+    .eq('id', req.params.id)
+    .single();
+  if (resourceError) return sendSupabaseError(res, resourceError);
+
+  const isOwnerOrAdmin = isAdministrator(req.user) || resource.created_by === req.user.profile.id;
+  const { data: bookings, error: bookingsError } = await supabaseAdmin
+    .from('bookings')
+    .select('id,student_id,start_at,end_at,status,purpose,decision_reason,created_at,picked_up_at,returned_at,requester:profiles!bookings_student_id_fkey(id,full_name)')
+    .eq('resource_id', resource.id)
+    .in('status', ['pending_approval', 'confirmed', 'checked_out', 'waitlisted', 'returned'])
+    .order('created_at', { ascending: true });
+  if (bookingsError) return sendSupabaseError(res, bookingsError);
+
+  const { data: conditionReports, error: reportsError } = await supabaseAdmin
+    .from('condition_reports')
+    .select('id,booking_id,stage,notes,checklist,author_id,created_at,author:profiles!condition_reports_author_id_fkey(id,full_name)')
+    .eq('resource_id', resource.id)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (reportsError) return sendSupabaseError(res, reportsError);
+
+  const visibleBookings = (bookings ?? []).filter((booking) => (
+    isOwnerOrAdmin || booking.student_id === req.user.profile.id
+  ));
+  const currentBooking = (bookings ?? []).find((booking) => booking.status === 'checked_out') ?? null;
+  const recentReturn = (bookings ?? [])
+    .filter((booking) => booking.status === 'returned' && booking.returned_at)
+    .sort((a, b) => Date.parse(b.returned_at) - Date.parse(a.returned_at))[0] ?? null;
+  const now = Date.now();
+  const hasCurrentReservation = (bookings ?? []).some((booking) => (
+    booking.status === 'confirmed'
+      && Date.parse(booking.start_at) <= now
+      && Date.parse(booking.end_at) > now
+  ));
+  res.json({
+    success: true,
+    data: {
+      resource: {
+        ...resource,
+        lister: resource.lister,
+        available_window: {
+          from: resource.available_from,
+          until: resource.available_until,
+        },
+      },
+      current_renter: currentBooking
+        ? {
+          booking_id: currentBooking.id,
+          name: isOwnerOrAdmin || currentBooking.student_id === req.user.profile.id
+            ? currentBooking.requester?.full_name
+            : null,
+          start_at: currentBooking.start_at,
+          scheduled_end_at: currentBooking.end_at,
+          returned_early: Boolean(currentBooking.returned_at && Date.parse(currentBooking.returned_at) < Date.parse(currentBooking.end_at)),
+        }
+        : null,
+      recent_return: recentReturn
+        ? {
+          returned_at: recentReturn.returned_at,
+          scheduled_end_at: recentReturn.end_at,
+          returned_early: Date.parse(recentReturn.returned_at) < Date.parse(recentReturn.end_at),
+        }
+        : null,
+      available_now: resource.status === 'available' && !currentBooking && !hasCurrentReservation,
+      bookings: visibleBookings,
+      waitlist: isOwnerOrAdmin
+        ? (bookings ?? []).filter((booking) => booking.status === 'waitlisted')
+        : [],
+      waitlist_count: (bookings ?? []).filter((booking) => booking.status === 'waitlisted').length,
+      condition_reports: isOwnerOrAdmin
+        ? conditionReports
+        : (conditionReports ?? []).filter((report) => visibleBookings.some((booking) => booking.id === report.booking_id)),
+      can_manage: isOwnerOrAdmin,
+    },
+  });
 });
 
 router.get('/:id/photo', async (req, res) => {
@@ -214,8 +308,18 @@ router.patch('/:id', requireAuth, requireResourceOwnerOrAdmin, async (req, res) 
   ];
   const update = Object.fromEntries(Object.entries(req.body).filter(([key]) => editable.includes(key)));
   if (!Object.keys(update).length) return fail(res, 400, 'No supported resource fields were supplied.');
-  if ((update.restricted ?? false) && update.approval_mode === 'auto') return fail(res, 400, 'Restricted resources must use manual approval.');
-  if (((update.restricted ?? false) || (update.high_value ?? false)) && update.handover_mode === 'self_service') {
+  const { data: currentResource, error: currentResourceError } = await supabaseAdmin
+    .from('resources')
+    .select('restricted,high_value,approval_mode,handover_mode')
+    .eq('id', req.params.id)
+    .single();
+  if (currentResourceError) return sendSupabaseError(res, currentResourceError);
+  const restricted = update.restricted ?? currentResource.restricted;
+  const highValue = update.high_value ?? currentResource.high_value;
+  const approvalMode = update.approval_mode ?? currentResource.approval_mode;
+  const handoverMode = update.handover_mode ?? currentResource.handover_mode;
+  if (restricted && approvalMode === 'auto') return fail(res, 400, 'Restricted resources must use manual approval.');
+  if ((restricted || highValue) && handoverMode === 'self_service') {
     return fail(res, 400, 'Restricted and high-value resources require staff-attended handover.');
   }
   if (update.status === 'retired') update.active = false;

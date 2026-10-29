@@ -133,12 +133,14 @@ router.get('/notifications', requireAuth, async (req, res) => {
 
 router.patch('/notifications/:id/read', requireAuth, async (req, res) => {
   if (!supabaseAdmin) return dbUnavailable(res);
+  const { read = true } = req.body ?? {};
+  if (typeof read !== 'boolean') return fail(res, 400, 'Read status must be true or false.');
   const { data, error } = await supabaseAdmin
     .from('notifications')
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: read ? new Date().toISOString() : null })
     .eq('id', req.params.id)
     .eq('user_id', req.user.profile.id)
-    .select('id,read_at')
+    .select('id,kind,title,message,booking_id,read_at,created_at')
     .single();
   if (error) return sendSupabaseError(res, error);
   res.json({ success: true, data });

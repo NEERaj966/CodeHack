@@ -13,14 +13,20 @@ The product requirements are in [SRS v1.1 Campus Resource Intelligence.md](./SRS
 - Administrator account, global listing, incident-review, and audit tools
 - Search by keyword, category, location, resource type, and requested time window
 - Booking requests with explainable manual approval/auto-approval and a waitlist outcome
+- Separate views for resources you requested and requests for resources you listed, with requester and lister names shown
 - FairShare defaults: up to two active requests, one active booking per category, eight hours per resource per week, and a 24-hour cooldown after bookings longer than four hours
 - Database-enforced booking overlap protection and booking state transitions
 - Lister-attended or self-service pickup/return with manual asset-code validation and condition reports
+- Resource detail pages show the current renter, availability window, schedule, waitlist, condition reports, and eligibility/certification requirements; listers can edit resource policy and details
+- Listers can review and approve waitlisted requests after an early return; the database rechecks conflicts and requires earlier overlapping waitlist requests to be handled first
+- Booking timelines grouped by resource/booking, including booking decisions, pickup/return condition reports, linked incidents, and audit events
+- Notifications can be filtered by unread status and toggled between read and unread
 - Incident reporting without automatic fault or penalty decisions
 - In-app decision notices, return reminders, overdue escalation, and an overdue incident for administrator/lister review
+- Prominent in-app error notices for API failures, browser runtime errors, unhandled promise rejections, and browser console errors
 - Member borrowing/lending transaction timeline and administrator audit-history endpoint; audit rows are protected against update/delete
 
-P1/P2 items such as cancellation and extension flows, team bookings, training-document review, waitlist offer claims, penalty/appeal processing, utilization radar, CSV export, and online payments are not included in this P0 implementation.
+P1/P2 items such as cancellation and extension flows, team bookings, training-document review, waitlist offer claim expiry, penalty/appeal processing, utilization radar, CSV export, and online payments are not included in this P0 implementation.
 
 ## Stack and layout
 
@@ -43,9 +49,10 @@ P1/P2 items such as cancellation and extension flows, team bookings, training-do
 1. Create a Supabase project.
 2. In **Project Settings → API**, copy the project URL, publishable/anon key, and service-role/secret key. The service-role key is privileged and must stay in the backend environment only.
 3. Apply database migrations in filename order:
-   - For a new project, run `202610290001_initial_schema.sql`, then `202610290002_add_member_role.sql`, then `202610290003_member_lending_model.sql`.
-   - If the initial migration was already applied, do **not** rerun it; run only `202610290002_add_member_role.sql` and `202610290003_member_lending_model.sql`.
+   - For a new project, run `202610290001_initial_schema.sql`, then `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql`.
+   - If the initial migration was already applied, do **not** rerun it; run migrations `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql` in that order.
    - In particular, `202610290003_member_lending_model.sql` adds the `ownership_attested_by` and `ownership_attested_at` columns required to create resource listings.
+   - `202610290004_waitlist_resource_details.sql` enables owner/admin decisions for waitlisted bookings after rechecking conflicts and overlapping queue order.
 4. Add each participating college's authorized email domain to the database allowlist (without `@`). These ten are examples; confirm each institution's official email domain and only allow colleges participating in your deployment:
 
    ```sql

@@ -5,6 +5,8 @@ import { getEligibilityFailure } from '../services/eligibility.js';
 import { fail, sendSupabaseError } from '../services/http.js';
 
 const router = express.Router();
+const bookingSelect = '*,requester:profiles!bookings_student_id_fkey(id,full_name),resources(name,asset_code,category,location,handover_mode,approval_mode,created_by,lister:profiles!resources_created_by_fkey(id,full_name))';
+
 function dbUnavailable(res) {
   return fail(res, 503, 'Supabase service-role access is not configured.');
 }
@@ -14,7 +16,7 @@ router.get('/', requireAuth, async (req, res) => {
   if (isAdministrator(req.user)) {
     const { data, error } = await supabaseAdmin
       .from('bookings')
-      .select('*,resources(name,asset_code,category,location,handover_mode,approval_mode,created_by)')
+      .select(bookingSelect)
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) return sendSupabaseError(res, error);
@@ -29,7 +31,7 @@ router.get('/', requireAuth, async (req, res) => {
   const ownedIds = (ownedResources ?? []).map((resource) => resource.id);
   let query = supabaseAdmin
     .from('bookings')
-    .select('*,resources(name,asset_code,category,location,handover_mode,approval_mode,created_by)')
+    .select(bookingSelect)
     .order('created_at', { ascending: false })
     .limit(100);
   query = ownedIds.length
@@ -58,7 +60,7 @@ router.post('/', requireAuth, async (req, res) => {
 
   const { data: resource, error: resourceError } = await supabaseAdmin
     .from('resources')
-    .select('id,created_by,active,status,eligibility_rules,approval_mode,restricted')
+    .select('id,name,asset_code,category,location,created_by,active,status,eligibility_rules,approval_mode,restricted,handover_mode,lister:profiles!resources_created_by_fkey(id,full_name)')
     .eq('id', resourceId)
     .single();
   if (resourceError) return sendSupabaseError(res, resourceError);
@@ -79,7 +81,24 @@ router.post('/', requireAuth, async (req, res) => {
     p_purpose: purpose.trim(),
   });
   if (error) return sendSupabaseError(res, error);
-  res.status(201).json({ success: true, data });
+  const booking = Array.isArray(data) ? data[0] : data;
+  res.status(201).json({
+    success: true,
+    data: {
+      ...booking,
+      requester: { id: req.user.profile.id, full_name: req.user.profile.full_name },
+      resources: {
+        id: resource.id,
+        name: resource.name,
+        asset_code: resource.asset_code,
+        category: resource.category,
+        location: resource.location,
+        created_by: resource.created_by,
+        handover_mode: resource.handover_mode,
+        lister: resource.lister,
+      },
+    },
+  });
 });
 
 router.patch('/:id/decision', requireAuth, async (req, res) => {

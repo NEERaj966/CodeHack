@@ -18,24 +18,30 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 - [x] Members can list attested institution-owned resources, manage their own listings, and approve requests for their listings.
 - [x] Administrators can manage all resources, accounts, and incident statuses.
 - [x] Resource discovery, filtering, details, and protected resource-photo handling.
+- [x] Booking dashboard distinguishes member requests from requests for their listings, identifies requester/lister, and shows the member's own inventory.
+- [x] Prominent timed error notices surface API failures and uncaught browser/console errors without disabling console logging.
 - [x] Eligibility checks and mandatory manual approval/lister-attended handover for restricted resources.
 - [x] Booking requests, approval decisions with reasons, and booking history.
 - [x] FairShare limits, explainable waitlist outcomes, and database-enforced overlap prevention.
 - [x] Manual asset-ID pickup/return and timestamped condition reports.
+- [x] Early return releases an in-use resource immediately; listers/admins can review and decide waitlisted requests from the resource detail view, with overlap and queue-order checks in Postgres.
+- [x] Resource detail view shows availability, current renter, schedule, waitlist, condition reports, and eligibility/certification requirements; listers/admins can edit resource details and policy.
+- [x] Transaction timelines grouped per booking/resource, plus explicit return guidance when a lister-attended handover is required.
+- [x] Notification read/unread state can be filtered and toggled in the UI.
 - [x] Incident reporting and administrator review/status handling without automatic fault or penalty decisions.
 - [x] In-app notifications, scheduled reminders/overdue escalation, timeline, and append-only audit events.
 - [x] Local backend tests/sanity checks, frontend lint, and production build.
 
 ### Supabase setup and end-to-end verification
 
-- [x] Configure the Supabase URL, anon/publishable key, and service-role secret in local `backend/.env`; never put the service-role secret in frontend configuration.
-- [x] Apply `backend/supabase/migrations/202610290001_initial_schema.sql` to a new Supabase project.
-- [x] Add participating colleges' approved email domains to `public.allowed_email_domains` and `COLLEGE_EMAIL_DOMAINS`.
-- [x] Configure Supabase Auth email confirmation and the local redirect URL.
-- [x] Register and verify an account, then promote the first administrator using the bootstrap SQL in `README.md`.
-- [x] Confirm `GET /api/health/ready` reports ready.
-- [ ] Apply `202610290002_add_member_role.sql` and `202610290003_member_lending_model.sql` to the existing Supabase project before using the member-lending model.
-- [ ] Exercise signup/sign-in, resource creation/discovery, eligibility, approval, overlap conflict, pickup/return, incident, notification, and audit flows against Supabase.
+- [ ] Configure the Supabase URL, anon/publishable key, and service-role secret in local `backend/.env`; never put the service-role secret in frontend configuration.
+- [ ] Apply `backend/supabase/migrations/202610290001_initial_schema.sql` to a new Supabase project, or confirm it is already applied.
+- [ ] Add participating colleges' approved email domains to `public.allowed_email_domains` and `COLLEGE_EMAIL_DOMAINS`.
+- [ ] Configure Supabase Auth email confirmation and the local redirect URL.
+- [ ] Register and verify an account, then promote the first administrator using the bootstrap SQL in `README.md`.
+- [ ] Confirm `GET /api/health/ready` reports ready.
+- [ ] Apply `202610290002_add_member_role.sql`, `202610290003_member_lending_model.sql`, and `202610290004_waitlist_resource_details.sql` in order before using the member-lending and waitlist-management features.
+- [ ] Exercise signup/sign-in, resource creation/discovery, eligibility, approval, overlap conflict, early pickup/return, waitlist decisions, incident, notification, and audit flows against Supabase.
 - [ ] Record integration results and resolve any migration, authorization, storage, or workflow findings.
 
 ## P1 checklist
@@ -56,15 +62,15 @@ Priority assignments follow the SRS v1.1 and project scope: P0 is required for t
 
 ## Validation status
 
-- Backend unit tests: passed (eligibility policy coverage).
-- Backend HTTP sanity test: passed (liveness and unconfigured readiness behavior).
+- Backend unit tests: passed (9 tests covering registration errors, eligibility, authorization, and HTTP/Supabase error handling).
+- Backend HTTP sanity test: passed (liveness; database reports `not_configured` in this environment).
 - Frontend lint: passed without warnings.
 - Frontend production build sanity test: passed.
 - Supabase-connected migration, authentication, RLS, storage, concurrency, and workflow verification: pending project configuration and credentials.
 
 ## Next milestone
 
-Apply the role-model migrations to Supabase, verify the P0 member-to-member lending and borrowing journey end to end, and record the results here before beginning P1 work.
+Apply the role-model and waitlist migrations to Supabase, verify the P0 member-to-member lending and borrowing journey—including early return, waitlist decisions, and resource editing—end to end, and record the results here before beginning P1 work.
 
 ## Multi-college/member-lending scope note
 

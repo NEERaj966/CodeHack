@@ -11,7 +11,9 @@ export function sendSupabaseError(res, error) {
     console.error(error);
     return fail(res, 503, 'Supabase schema is out of date. Apply the latest database migrations and reload the PostgREST schema cache.');
   }
-  if (error?.code === 'P0001' || error?.code === '22023') return fail(res, 422, message);
+  if (error?.code === 'P0001' || error?.code === '22023') {
+    return fail(res, 422, error.message || 'The request could not be completed because of a booking rule.');
+  }
   console.error(error);
   return fail(res, 500, 'Database operation failed. Check server logs for details.');
 }

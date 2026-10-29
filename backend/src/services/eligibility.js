@@ -2,7 +2,7 @@ export function getEligibilityFailure(profile, resource) {
   const rules = resource.eligibility_rules ?? {};
   const allowedDepartments = rules.allowed_departments ?? [];
   if (allowedDepartments.length && !allowedDepartments.includes(profile.department)) {
-    return 'This resource is restricted to approved departments.';
+    return `This resource is restricted to these departments: ${allowedDepartments.join(', ')}. Your profile department must match one of them.`;
   }
   if (rules.minimum_year && (!profile.student_year || profile.student_year < rules.minimum_year)) {
     return `This resource requires members to be in year ${rules.minimum_year} or later.`;

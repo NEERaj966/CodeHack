@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const apiBase = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
@@ -48,16 +48,35 @@ function localDateTime(hoursFromNow) {
   return date.toISOString().slice(0, 16)
 }
 
+function toLocalDateTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+  return date.toISOString().slice(0, 16)
+}
+
+function getErrorDetail(value) {
+  const detail = value instanceof Error ? value.message : typeof value === 'string' ? value : value?.message
+  if (!detail) return 'See the browser developer console for details.'
+  return String(detail)
+    .replace(/bearer\s+[\w.-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(access_token|refresh_token|token|apikey|api_key|authorization)=([^&\s]+)/gi, '$1=[redacted]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email redacted]')
+    .slice(0, 240)
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [authMode, setAuthMode] = useState('login')
   const [authMessage, setAuthMessage] = useState('')
   const [authForm, setAuthForm] = useState({ full_name: '', email: '', password: '', department: '', student_year: '' })
   const [resources, setResources] = useState([])
+  const [myResources, setMyResources] = useState([])
   const [bookings, setBookings] = useState([])
   const [timeline, setTimeline] = useState([])
   const [dashboard, setDashboard] = useState(null)
   const [notifications, setNotifications] = useState([])
+  const [notificationFilter, setNotificationFilter] = useState('all')
   const [adminUsers, setAdminUsers] = useState([])
   const [adminIncidents, setAdminIncidents] = useState([])
   const [query, setQuery] = useState('')
@@ -70,6 +89,10 @@ function App() {
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState('resources')
   const [requestingResource, setRequestingResource] = useState(null)
+  const [resourceDetails, setResourceDetails] = useState(null)
+  const [resourceDetailsLoading, setResourceDetailsLoading] = useState(false)
+  const [editingResourceDetails, setEditingResourceDetails] = useState(false)
+  const [resourceEditForm, setResourceEditForm] = useState(null)
   const [requestForm, setRequestForm] = useState({ start_at: localDateTime(24), end_at: localDateTime(26), purpose: '' })
   const [resourceForm, setResourceForm] = useState({
     name: '', asset_code: '', description: '', category: 'IT', resource_type: 'equipment',
@@ -78,6 +101,7 @@ function App() {
     allowed_departments: '', minimum_year: '', required_training: '', available_from: '', available_until: '',
   })
   const [incidentForm, setIncidentForm] = useState({ booking_id: '', resource_id: '', kind: 'damage', description: '' })
+  const lastConsoleError = useRef({ detail: '', timestamp: 0 })
   const isAdmin = user?.role === 'administrator'
   const canManageBooking = (booking) => isAdmin || booking.resources?.created_by === user?.id
   const canCompleteHandover = (booking) => (
@@ -85,6 +109,45 @@ function App() {
     || booking.resources?.created_by === user?.id
     || (booking.student_id === user?.id && booking.resources?.handover_mode === 'self_service')
   )
+
+  useEffect(() => {
+    if (!error && !message && !authMessage) return undefined
+
+    const timeout = window.setTimeout(() => {
+      setError('')
+      setMessage('')
+      setAuthMessage('')
+    }, error ? 8000 : 3000)
+
+    return () => window.clearTimeout(timeout)
+  }, [authMessage, error, message])
+
+  useEffect(() => {
+    const reportBrowserError = (event) => {
+      setError(`Browser error: ${getErrorDetail(event.error || event.message)}`)
+    }
+    const reportUnhandledRejection = (event) => {
+      setError(`Unhandled browser promise rejection: ${getErrorDetail(event.reason)}`)
+    }
+    const originalConsoleError = console.error
+    console.error = (...args) => {
+      originalConsoleError.apply(console, args)
+      const detail = getErrorDetail(args[0])
+      const now = Date.now()
+      if (detail !== lastConsoleError.current.detail || now - lastConsoleError.current.timestamp > 3000) {
+        lastConsoleError.current = { detail, timestamp: now }
+        setError(`Console error: ${detail}`)
+      }
+    }
+    window.addEventListener('error', reportBrowserError)
+    window.addEventListener('unhandledrejection', reportUnhandledRejection)
+
+    return () => {
+      console.error = originalConsoleError
+      window.removeEventListener('error', reportBrowserError)
+      window.removeEventListener('unhandledrejection', reportUnhandledRejection)
+    }
+  }, [])
 
   const loadResources = useCallback(async () => {
     const params = new URLSearchParams()
@@ -102,13 +165,15 @@ function App() {
 
   const loadPrivateData = useCallback(async () => {
     if (!user) return
-    const [bookingResult, timelineResult, dashboardResult, notificationResult] = await Promise.all([
+    const [bookingResult, timelineResult, dashboardResult, notificationResult, myResourcesResult] = await Promise.all([
       api('/bookings'),
       api('/timeline'),
       api('/dashboard'),
       api('/notifications'),
+      api('/resources/mine'),
     ])
     setBookings(bookingResult.data)
+    setMyResources(myResourcesResult.data)
     setTimeline(timelineResult.data)
     setDashboard(dashboardResult.data)
     setNotifications(notificationResult.data)
@@ -187,6 +252,85 @@ function App() {
     () => bookings.filter((booking) => booking.status === 'pending_approval'),
     [bookings],
   )
+  const myBookingRequests = useMemo(
+    () => bookings.filter((booking) => booking.student_id === user?.id),
+    [bookings, user?.id],
+  )
+  const requestsForMyListings = useMemo(
+    () => bookings.filter((booking) => booking.resources?.created_by === user?.id && booking.student_id !== user?.id),
+    [bookings, user?.id],
+  )
+  const otherAdminBookings = useMemo(
+    () => isAdmin
+      ? bookings.filter((booking) => booking.student_id !== user?.id && booking.resources?.created_by !== user?.id)
+      : [],
+    [bookings, isAdmin, user?.id],
+  )
+  const timelineGroups = useMemo(() => {
+    const groups = new Map()
+    for (const event of timeline) {
+      const { data } = event
+      const bookingId = event.type === 'booking'
+        ? data.id
+        : event.type === 'audit' && data.record_type === 'booking'
+          ? data.record_id
+          : data.booking_id
+      const resourceId = data.resource_id ?? data.resources?.id
+      const groupId = bookingId ? `booking:${bookingId}` : resourceId ? `resource:${resourceId}` : `${event.type}:${event.occurred_at}`
+      if (!groups.has(groupId)) {
+        const booking = bookings.find((item) => item.id === bookingId)
+        groups.set(groupId, {
+          id: groupId,
+          title: booking?.resources?.name ?? data.resources?.name ?? 'Resource activity',
+          assetCode: booking?.resources?.asset_code ?? data.resources?.asset_code,
+          booking,
+          events: [],
+        })
+      }
+      groups.get(groupId).events.push(event)
+    }
+    return [...groups.values()]
+      .map((group) => ({ ...group, events: group.events.sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at)) }))
+      .sort((a, b) => Date.parse(b.events.at(-1)?.occurred_at) - Date.parse(a.events.at(-1)?.occurred_at))
+  }, [bookings, timeline])
+  const visibleNotifications = useMemo(
+    () => notificationFilter === 'unread' ? notifications.filter((item) => !item.read_at) : notifications,
+    [notificationFilter, notifications],
+  )
+
+  function renderBookingCard(booking, context) {
+    const requesterName = booking.requester?.full_name
+      || (booking.student_id === user?.id ? 'You' : 'Member')
+    const listerName = booking.resources?.lister?.full_name
+      || (booking.resources?.created_by === user?.id ? 'You' : 'Member')
+    return (
+      <article className="booking-card" key={booking.id}>
+        <div className="booking-title">
+          <div>
+            <h3>{booking.resources?.name || 'Campus resource'}</h3>
+            <p>{booking.resources?.asset_code} · {new Date(booking.start_at).toLocaleString()} to {new Date(booking.end_at).toLocaleString()}</p>
+          </div>
+          <span className={`status-chip status-${booking.status}`}>{booking.status.replaceAll('_', ' ')}</span>
+        </div>
+        <div className="booking-parties">
+          <p><strong>{context === 'incoming' ? 'Requested by' : 'Requester'}:</strong> {requesterName}</p>
+          <p><strong>Listed by:</strong> {listerName}</p>
+        </div>
+        <p>{booking.purpose}</p>
+        <p className="helper-text">{booking.decision_reason}</p>
+        <div className="card-actions">
+          {booking.status === 'confirmed' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'pickup')}>Record pickup</button> : null}
+          {booking.status === 'checked_out' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'return')}>Record return</button> : null}
+          {booking.status === 'checked_out'
+            && !canCompleteHandover(booking)
+            && booking.student_id === user?.id
+            && booking.resources?.handover_mode === 'staff_attended'
+            ? <p className="handover-guidance">Return this resource to {listerName}; they must record the attended return.</p>
+            : null}
+        </div>
+      </article>
+    )
+  }
 
   async function submitAuth(event) {
     event.preventDefault()
@@ -237,10 +381,19 @@ function App() {
           purpose: requestForm.purpose,
         }),
       })
-      setMessage(response.data.decision_reason)
+      const submittedBooking = Array.isArray(response.data) ? response.data[0] : response.data
+      if (!submittedBooking?.id) {
+        throw new Error('Booking request was submitted, but the server did not return its booking record.')
+      }
+      setMessage(`Request for ${requestingResource.name} submitted: ${submittedBooking.status.replaceAll('_', ' ')}.`)
       setRequestingResource(null)
       setRequestForm({ start_at: localDateTime(24), end_at: localDateTime(26), purpose: '' })
+      setActiveTab('bookings')
       await refresh()
+      setBookings((current) => [
+        { ...submittedBooking, resources: submittedBooking.resources ?? requestingResource },
+        ...current.filter((booking) => booking.id !== submittedBooking.id),
+      ])
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -296,6 +449,83 @@ function App() {
       })
       setMessage(response.data.decision_reason)
       await refresh()
+      if (resourceDetails?.resource.id) await openResourceDetails(resourceDetails.resource.id)
+    } catch (requestError) {
+      setError(requestError.message)
+    }
+  }
+
+  async function openResourceDetails(resourceId) {
+    setResourceDetailsLoading(true)
+    setResourceDetails(null)
+    setEditingResourceDetails(false)
+    setResourceEditForm(null)
+    try {
+      const response = await api(`/resources/${resourceId}/details`)
+      setResourceDetails(response.data)
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setResourceDetailsLoading(false)
+    }
+  }
+
+  function beginResourceEdit() {
+    const resource = resourceDetails?.resource
+    if (!resource || !resourceDetails.can_manage) return
+    setResourceEditForm({
+      name: resource.name,
+      description: resource.description ?? '',
+      category: resource.category,
+      resource_type: resource.resource_type,
+      location: resource.location,
+      department: resource.department,
+      institution: resource.institution,
+      condition: resource.condition,
+      status: resource.status,
+      active: resource.active,
+      approval_mode: resource.approval_mode,
+      handover_mode: resource.handover_mode,
+      restricted: resource.restricted,
+      high_value: resource.high_value,
+      usage_terms: resource.usage_terms ?? '',
+      available_from: toLocalDateTime(resource.available_from),
+      available_until: toLocalDateTime(resource.available_until),
+      allowed_departments: (resource.eligibility_rules?.allowed_departments ?? []).join(', '),
+      minimum_year: resource.eligibility_rules?.minimum_year ?? '',
+      required_training: (resource.eligibility_rules?.required_training ?? []).join(', '),
+    })
+    setEditingResourceDetails(true)
+  }
+
+  async function saveResourceDetails(event) {
+    event.preventDefault()
+    if (!resourceDetails || !resourceEditForm) return
+    const eligibility_rules = {
+      allowed_departments: resourceEditForm.allowed_departments.split(',').map((item) => item.trim()).filter(Boolean),
+      required_training: resourceEditForm.required_training.split(',').map((item) => item.trim()).filter(Boolean),
+      ...(resourceEditForm.minimum_year ? { minimum_year: Number(resourceEditForm.minimum_year) } : {}),
+    }
+    const body = {
+      ...resourceEditForm,
+      eligibility_rules,
+      available_from: resourceEditForm.available_from
+        ? new Date(resourceEditForm.available_from).toISOString()
+        : null,
+      available_until: resourceEditForm.available_until
+        ? new Date(resourceEditForm.available_until).toISOString()
+        : null,
+      active: resourceEditForm.status === 'retired' ? false : resourceEditForm.active,
+      reason: 'Resource details updated by its lister.',
+    }
+    try {
+      await api(`/resources/${resourceDetails.resource.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      })
+      setMessage('Resource details updated.')
+      await openResourceDetails(resourceDetails.resource.id)
+      await refresh()
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -312,6 +542,9 @@ function App() {
       })
       setMessage(`${action === 'pickup' ? 'Pickup' : 'Return'} recorded.`)
       await refresh()
+      if (resourceDetails?.resource.id === booking.resource_id) {
+        await openResourceDetails(resourceDetails.resource.id)
+      }
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -368,10 +601,16 @@ function App() {
     }
   }
 
-  async function markNotificationRead(id) {
+  async function toggleNotificationRead(notification) {
+    const read = !notification.read_at
     try {
-      await api(`/notifications/${id}/read`, { method: 'PATCH', body: JSON.stringify({}) })
-      setNotifications((current) => current.map((item) => item.id === id ? { ...item, read_at: new Date().toISOString() } : item))
+      const response = await api(`/notifications/${notification.id}/read`, {
+        method: 'PATCH',
+        body: JSON.stringify({ read }),
+      })
+      setNotifications((current) => current.map((item) => (
+        item.id === notification.id ? { ...item, ...response.data } : item
+      )))
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -429,7 +668,8 @@ function App() {
       </header>
 
       {(error || message || authMessage) ? (
-        <div className={`notice ${error ? 'notice-error' : ''}`} role="status">
+        <div className={`notice ${error ? 'notice-error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}>
+          {error ? <strong className="notice-label">Something needs your attention</strong> : null}
           {error || message || authMessage}
           <button type="button" aria-label="Dismiss message" onClick={() => { setError(''); setMessage(''); setAuthMessage('') }}>×</button>
         </div>
@@ -523,6 +763,7 @@ function App() {
                       {resource.eligibility_rules?.required_training?.length ? <p className="helper-text">Required training: {resource.eligibility_rules.required_training.join(', ')}</p> : null}
                       {resource.usage_terms ? <p className="helper-text">{resource.usage_terms}</p> : null}
                       <div className="card-actions">
+                        <button className="secondary-btn" type="button" onClick={() => openResourceDetails(resource.id)}>Resource details</button>
                         {resource.created_by === user?.id
                           ? <span className="helper-text">Your listing</span>
                           : <button className="primary-btn" type="button" onClick={() => setRequestingResource(resource)}>Request resource</button>}
@@ -542,31 +783,41 @@ function App() {
 
           {activeTab === 'bookings' ? (
             <section className="content-section">
-              <div className="section-heading"><div><p className="eyebrow">Requests and handovers</p><h2>Bookings</h2></div></div>
+              <div className="section-heading"><div><p className="eyebrow">Your lending and borrowing</p><h2>Bookings</h2></div></div>
               {pendingBookings.some(canManageBooking) ? (
                 <div className="approval-panel">
                   <h3>Requests awaiting approval</h3>
                   {pendingBookings.filter(canManageBooking).map((booking) => (
                     <div className="approval-row" key={booking.id}>
-                      <span>{booking.resources?.name || 'Resource'} · {new Date(booking.start_at).toLocaleString()} — {booking.purpose}</span>
+                      <span>{booking.resources?.name || 'Resource'} · Requested by {booking.requester?.full_name || 'Member'} · {new Date(booking.start_at).toLocaleString()} — {booking.purpose}</span>
                       <div><button className="approve-btn" type="button" onClick={() => decideBooking(booking.id, true)}>Approve</button><button className="reject-btn" type="button" onClick={() => decideBooking(booking.id, false)}>Reject</button></div>
                     </div>
                   ))}
                 </div>
               ) : null}
-              <div className="booking-list">
-                {bookings.map((booking) => (
-                  <article className="booking-card" key={booking.id}>
-                    <div className="booking-title"><div><h3>{booking.resources?.name || 'Campus resource'}</h3><p>{booking.resources?.asset_code} · {new Date(booking.start_at).toLocaleString()} to {new Date(booking.end_at).toLocaleString()}</p></div><span className={`status-chip status-${booking.status}`}>{booking.status.replaceAll('_', ' ')}</span></div>
-                    <p>{booking.purpose}</p><p className="helper-text">{booking.decision_reason}</p>
-                    <div className="card-actions">
-                      {booking.status === 'confirmed' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'pickup')}>Record pickup</button> : null}
-                      {booking.status === 'checked_out' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'return')}>Record return</button> : null}
-                    </div>
-                  </article>
-                ))}
-                {!bookings.length ? <p className="empty-state">Your bookings will appear here.</p> : null}
-              </div>
+              <section className="booking-group">
+                <div className="booking-group-heading"><h3>Resources I requested</h3><span>{myBookingRequests.length}</span></div>
+                <div className="booking-list">
+                  {myBookingRequests.map((booking) => renderBookingCard(booking, 'outgoing'))}
+                  {!myBookingRequests.length ? <p className="empty-state">You haven’t requested any resources yet. Find a resource and select “Request resource” to get started.</p> : null}
+                </div>
+              </section>
+              <section className="booking-group">
+                <div className="booking-group-heading"><h3>Requests for resources I listed</h3><span>{requestsForMyListings.length}</span></div>
+                <div className="booking-list">
+                  {requestsForMyListings.map((booking) => renderBookingCard(booking, 'incoming'))}
+                  {!requestsForMyListings.length ? <p className="empty-state">No one has requested a resource you listed yet.</p> : null}
+                </div>
+              </section>
+              {isAdmin ? (
+                <section className="booking-group">
+                  <div className="booking-group-heading"><h3>Other platform bookings</h3><span>{otherAdminBookings.length}</span></div>
+                  <div className="booking-list">
+                    {otherAdminBookings.map((booking) => renderBookingCard(booking, 'admin'))}
+                    {!otherAdminBookings.length ? <p className="empty-state">No other platform bookings.</p> : null}
+                  </div>
+                </section>
+              ) : null}
               <form className="incident-form" onSubmit={reportIncident}>
                 <h3>Report an incident</h3>
                 <select value={incidentForm.booking_id} onChange={(event) => setIncidentForm({ ...incidentForm, booking_id: event.target.value })}>
@@ -590,33 +841,92 @@ function App() {
 
           {activeTab === 'timeline' ? (
             <section className="content-section">
-              <div className="section-heading"><div><p className="eyebrow">Traceable activity</p><h2>Transaction timeline</h2></div></div>
-              <div className="timeline-list">
-                {timeline.map((item, index) => (
-                  <article className="timeline-item" key={`${item.type}-${item.occurred_at}-${index}`}>
-                    <span className="timeline-dot"></span>
-                    <div><p className="timeline-kind">{item.type.replaceAll('_', ' ')}</p><p>{item.data.decision_reason || item.data.description || item.data.notes || item.data.action || item.data.resources?.name || 'Activity recorded'}</p><time>{new Date(item.occurred_at).toLocaleString()}</time></div>
-                  </article>
+              <div className="section-heading"><div><p className="eyebrow">Grouped by resource and booking</p><h2>Transaction timelines</h2></div></div>
+              <div className="resource-timelines">
+                {timelineGroups.map((group) => (
+                  <section className="resource-timeline" key={group.id}>
+                    <div className="resource-timeline-heading">
+                      <div><h3>{group.title}</h3>{group.assetCode ? <p>{group.assetCode}</p> : null}</div>
+                      {group.booking ? <span className={`status-chip status-${group.booking.status}`}>{group.booking.status.replaceAll('_', ' ')}</span> : null}
+                    </div>
+                    <div className="timeline-list">
+                      {group.events.map((item, index) => (
+                        <article className="timeline-item" key={`${item.type}-${item.occurred_at}-${index}`}>
+                          <span className="timeline-dot"></span>
+                          <div>
+                            <p className="timeline-kind">{item.type.replaceAll('_', ' ')}</p>
+                            <p>{item.data.decision_reason || item.data.description || item.data.notes || item.data.action || item.data.resources?.name || 'Activity recorded'}</p>
+                            <time>{new Date(item.occurred_at).toLocaleString()}</time>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
                 ))}
-                {!timeline.length ? <p className="empty-state">No transaction activity yet.</p> : null}
+                {!timelineGroups.length ? <p className="empty-state">No transaction activity yet.</p> : null}
               </div>
-              {notifications.length ? (
-                <div className="notification-list">
-                  <h3>Notifications</h3>
-                  {notifications.slice(0, 10).map((notification) => (
-                    <article className={notification.read_at ? 'notification read' : 'notification'} key={notification.id}>
-                      <div><strong>{notification.title}</strong><p>{notification.message}</p></div>
-                      {!notification.read_at ? <button type="button" onClick={() => markNotificationRead(notification.id)}>Mark read</button> : null}
-                    </article>
+              <div className="notification-list">
+                <div className="notification-heading">
+                  <div><p className="eyebrow">Updates for your account</p><h3>Notifications</h3></div>
+                  <span>{notifications.filter((item) => !item.read_at).length} unread</span>
+                </div>
+                <div className="notification-filters" aria-label="Filter notifications">
+                  {['all', 'unread'].map((filter) => (
+                    <button
+                      type="button"
+                      key={filter}
+                      className={notificationFilter === filter ? 'selected' : ''}
+                      onClick={() => setNotificationFilter(filter)}
+                    >
+                      {filter === 'all' ? `All (${notifications.length})` : `Unread (${notifications.filter((item) => !item.read_at).length})`}
+                    </button>
                   ))}
                 </div>
-              ) : null}
+                {visibleNotifications.length ? visibleNotifications.map((notification) => (
+                  <article className={notification.read_at ? 'notification read' : 'notification'} key={notification.id}>
+                    <div>
+                      <span className={`notification-state ${notification.read_at ? 'is-read' : 'is-unread'}`}>{notification.read_at ? 'Read' : 'Unread'}</span>
+                      <strong>{notification.title}</strong>
+                      <p>{notification.message}</p>
+                      <time>{new Date(notification.created_at).toLocaleString()}</time>
+                    </div>
+                    <button type="button" onClick={() => toggleNotificationRead(notification)}>
+                      Mark {notification.read_at ? 'unread' : 'read'}
+                    </button>
+                  </article>
+                )) : <p className="empty-state">{notificationFilter === 'unread' ? 'You’re all caught up.' : 'No notifications yet.'}</p>}
+              </div>
             </section>
           ) : null}
 
           {activeTab === 'manage' ? (
             <section className="content-section manage-layout">
               <div>
+                <section className="my-listings-panel">
+                  <div className="booking-group-heading"><div><p className="eyebrow">Your inventory</p><h2>Resources I listed</h2></div><span>{myResources.length}</span></div>
+                  {myResources.length ? (
+                    <div className="my-listings-list">
+                      {myResources.map((resource) => {
+                        const requestCount = bookings.filter((booking) => (
+                          booking.resource_id === resource.id && booking.student_id !== user?.id
+                        )).length
+                        return (
+                          <article className="my-listing-row" key={resource.id}>
+                            <div>
+                              <strong>{resource.name}</strong>
+                              <p>{resource.asset_code} · {resource.location} · {resource.category}</p>
+                              <p>{requestCount} request{requestCount === 1 ? '' : 's'} · {resource.approval_mode.replaceAll('_', ' ')} approval</p>
+                            </div>
+                            <div className="my-listing-actions">
+                              <span className={`status-chip status-${resource.status}`}>{resource.status.replaceAll('_', ' ')}</span>
+                              <button type="button" className="secondary-btn" onClick={() => openResourceDetails(resource.id)}>Details & manage</button>
+                            </div>
+                          </article>
+                        )
+                      })}
+                    </div>
+                  ) : <p className="empty-state">You haven’t listed any resources yet. Use the form below to list an institution-owned resource.</p>}
+                </section>
                 <div className="section-heading"><div><p className="eyebrow">Member lending</p><h2>List an institution-owned resource</h2></div></div>
                 <form className="form-stack resource-form" onSubmit={createResource}>
                   <label className="check-label"><input required type="checkbox" /> I confirm this resource is institution-owned and I am authorized to list it.</label>
@@ -709,6 +1019,151 @@ function App() {
             <label>Purpose<textarea required minLength="3" value={requestForm.purpose} onChange={(event) => setRequestForm({ ...requestForm, purpose: event.target.value })} /></label>
             <button className="primary-btn" type="submit">Submit request</button>
           </form>
+        </div>
+      ) : null}
+      {(resourceDetailsLoading || resourceDetails) ? (
+        <div
+          className="modal-backdrop resource-details-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setResourceDetails(null)
+              setEditingResourceDetails(false)
+            }
+          }}
+        >
+          <section className="resource-details-modal" role="dialog" aria-modal="true" aria-labelledby="resource-details-title">
+            <button
+              className="modal-close"
+              type="button"
+              aria-label="Close resource details"
+              onClick={() => { setResourceDetails(null); setEditingResourceDetails(false) }}
+            >×</button>
+            {resourceDetailsLoading || !resourceDetails ? <p>Loading resource details…</p> : (
+              <>
+                <div className="resource-details-header">
+                  <div>
+                    <p className="eyebrow">Resource passport</p>
+                    <h2 id="resource-details-title">{resourceDetails.resource.name}</h2>
+                    <p>{resourceDetails.resource.asset_code} · {resourceDetails.resource.location} · Listed by {resourceDetails.resource.lister?.full_name || 'Campus member'}</p>
+                  </div>
+                  <span className={`status-chip status-${resourceDetails.resource.status}`}>{resourceDetails.resource.status.replaceAll('_', ' ')}</span>
+                </div>
+                {editingResourceDetails && resourceEditForm ? (
+                  <form className="resource-form form-stack resource-detail-edit-form" onSubmit={saveResourceDetails}>
+                    <h3>Edit resource details</h3>
+                    <label>Name<input required value={resourceEditForm.name} onChange={(event) => setResourceEditForm({ ...resourceEditForm, name: event.target.value })} /></label>
+                    <label>Description<textarea value={resourceEditForm.description} onChange={(event) => setResourceEditForm({ ...resourceEditForm, description: event.target.value })} /></label>
+                    <div className="form-row">
+                      <label>Category<select value={resourceEditForm.category} onChange={(event) => setResourceEditForm({ ...resourceEditForm, category: event.target.value })}>{categories.map((item) => <option key={item}>{item}</option>)}</select></label>
+                      <label>Type<select value={resourceEditForm.resource_type} onChange={(event) => setResourceEditForm({ ...resourceEditForm, resource_type: event.target.value })}>{['equipment', 'space', 'facility'].map((item) => <option key={item}>{item}</option>)}</select></label>
+                    </div>
+                    <div className="form-row">
+                      <label>Location<input required value={resourceEditForm.location} onChange={(event) => setResourceEditForm({ ...resourceEditForm, location: event.target.value })} /></label>
+                      <label>Condition<input required value={resourceEditForm.condition} onChange={(event) => setResourceEditForm({ ...resourceEditForm, condition: event.target.value })} /></label>
+                    </div>
+                    <div className="form-row">
+                      <label>Department<input required value={resourceEditForm.department} onChange={(event) => setResourceEditForm({ ...resourceEditForm, department: event.target.value })} /></label>
+                      <label>Institution<input required value={resourceEditForm.institution} onChange={(event) => setResourceEditForm({ ...resourceEditForm, institution: event.target.value })} /></label>
+                    </div>
+                    <div className="form-row">
+                      <label>Status<select value={resourceEditForm.status} onChange={(event) => setResourceEditForm({ ...resourceEditForm, status: event.target.value })}>{['available', 'reserved', 'in_use', 'under_maintenance', 'unavailable', 'retired'].map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}</select></label>
+                      <label>Approval<select value={resourceEditForm.approval_mode} onChange={(event) => setResourceEditForm({ ...resourceEditForm, approval_mode: event.target.value })}><option value="manual">Manual approval</option><option value="auto" disabled={resourceEditForm.restricted}>Automatic approval</option></select></label>
+                    </div>
+                    <label>Request window begins<input type="datetime-local" value={resourceEditForm.available_from} onChange={(event) => setResourceEditForm({ ...resourceEditForm, available_from: event.target.value })} /></label>
+                    <label>Request window ends<input type="datetime-local" value={resourceEditForm.available_until} onChange={(event) => setResourceEditForm({ ...resourceEditForm, available_until: event.target.value })} /></label>
+                    <label>Eligible departments (comma-separated)<input value={resourceEditForm.allowed_departments} onChange={(event) => setResourceEditForm({ ...resourceEditForm, allowed_departments: event.target.value })} /></label>
+                    <div className="form-row">
+                      <label>Minimum study year<input type="number" min="1" max="10" value={resourceEditForm.minimum_year} onChange={(event) => setResourceEditForm({ ...resourceEditForm, minimum_year: event.target.value })} /></label>
+                      <label>Required training/certifications<input value={resourceEditForm.required_training} onChange={(event) => setResourceEditForm({ ...resourceEditForm, required_training: event.target.value })} placeholder="e.g. LAB-101, SAFETY-1" /></label>
+                    </div>
+                    <label>Usage and condition terms<textarea value={resourceEditForm.usage_terms} onChange={(event) => setResourceEditForm({ ...resourceEditForm, usage_terms: event.target.value })} /></label>
+                    <label className="check-label"><input type="checkbox" checked={resourceEditForm.restricted} onChange={(event) => setResourceEditForm({
+                      ...resourceEditForm,
+                      restricted: event.target.checked,
+                      approval_mode: event.target.checked ? 'manual' : resourceEditForm.approval_mode,
+                      handover_mode: event.target.checked ? 'staff_attended' : resourceEditForm.handover_mode,
+                    })} /> Restricted resource (manual approval and attended handover)</label>
+                    <label className="check-label"><input type="checkbox" checked={resourceEditForm.high_value} onChange={(event) => setResourceEditForm({
+                      ...resourceEditForm,
+                      high_value: event.target.checked,
+                      handover_mode: event.target.checked ? 'staff_attended' : resourceEditForm.handover_mode,
+                    })} /> High-value resource (attended handover)</label>
+                    <label>Handover<select value={resourceEditForm.handover_mode} onChange={(event) => setResourceEditForm({ ...resourceEditForm, handover_mode: event.target.value })}><option value="staff_attended">Lister attended</option><option value="self_service" disabled={resourceEditForm.restricted || resourceEditForm.high_value}>Self service</option></select></label>
+                    <label className="check-label"><input type="checkbox" checked={resourceEditForm.active} onChange={(event) => setResourceEditForm({ ...resourceEditForm, active: event.target.checked })} /> Active listing</label>
+                    <div className="card-actions">
+                      <button className="primary-btn" type="submit">Save resource details</button>
+                      <button className="secondary-btn" type="button" onClick={() => setEditingResourceDetails(false)}>Cancel</button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    <div className="resource-details-grid">
+                      <article><span>Condition</span><strong>{resourceDetails.resource.condition}</strong></article>
+                      <article><span>Availability window</span><strong>{resourceDetails.resource.available_from ? new Date(resourceDetails.resource.available_from).toLocaleString() : 'Open start'} – {resourceDetails.resource.available_until ? new Date(resourceDetails.resource.available_until).toLocaleString() : 'No end date'}</strong></article>
+                      <article><span>Current renter</span><strong>{resourceDetails.current_renter?.name || (resourceDetails.current_renter ? 'Renter details private' : 'Not currently checked out')}</strong>{resourceDetails.current_renter ? <small>{resourceDetails.current_renter.returned_early ? 'Returned early' : `Scheduled until ${new Date(resourceDetails.current_renter.scheduled_end_at).toLocaleString()}`}</small> : null}</article>
+                      <article><span>Waitlist</span><strong>{resourceDetails.waitlist_count} request{resourceDetails.waitlist_count === 1 ? '' : 's'}</strong><small>Approval is rechecked against current conflicts and queue order.</small></article>
+                      <article><span>Required departments</span><strong>{resourceDetails.resource.eligibility_rules?.allowed_departments?.join(', ') || 'Any department'}</strong></article>
+                      <article><span>Required certifications</span><strong>{resourceDetails.resource.eligibility_rules?.required_training?.join(', ') || 'None specified'}</strong></article>
+                      <article><span>Minimum study year</span><strong>{resourceDetails.resource.eligibility_rules?.minimum_year || 'None specified'}</strong></article>
+                      <article><span>Approval / handover</span><strong>{resourceDetails.resource.approval_mode.replaceAll('_', ' ')} / {resourceDetails.resource.handover_mode.replaceAll('_', ' ')}</strong></article>
+                    </div>
+                    {resourceDetails.recent_return?.returned_early && resourceDetails.available_now ? (
+                      <p className="early-return-notice">
+                        Returned early on {new Date(resourceDetails.recent_return.returned_at).toLocaleString()}. The resource is available now; you can review and approve overlapping waitlist requests below.
+                      </p>
+                    ) : null}
+                    <p className="resource-detail-description">{resourceDetails.resource.description || 'No description supplied.'}</p>
+                    <p className="resource-detail-description">{resourceDetails.resource.usage_terms || 'No additional usage terms supplied.'}</p>
+                    {resourceDetails.can_manage ? (
+                      <div className="resource-detail-section">
+                        <div className="booking-group-heading"><h3>Waitlist approval</h3><span>{resourceDetails.waitlist.length}</span></div>
+                        {resourceDetails.waitlist.map((booking) => (
+                          <article className="waitlist-row" key={booking.id}>
+                            <div>
+                              <strong>Waitlisted request · {booking.requester?.full_name || 'Member'}</strong>
+                              <p>{new Date(booking.start_at).toLocaleString()} – {new Date(booking.end_at).toLocaleString()} · {booking.purpose}</p>
+                              <small>{booking.decision_reason}</small>
+                            </div>
+                            <button className="approve-btn" type="button" onClick={() => decideBooking(booking.id, true)}>Review and approve</button>
+                          </article>
+                        ))}
+                        {!resourceDetails.waitlist.length ? <p className="empty-state">No waitlisted requests. Once you record an early return, eligible overlapping waitlist requests can be approved here.</p> : null}
+                      </div>
+                    ) : null}
+                    <div className="resource-detail-section">
+                      <h3>Schedule and requests</h3>
+                      {resourceDetails.bookings.length ? resourceDetails.bookings.map((booking) => (
+                        <article className="waitlist-row" key={booking.id}>
+                          <div>
+                            <strong>{booking.status.replaceAll('_', ' ')} · {booking.requester?.full_name || (booking.student_id === user?.id ? 'You' : 'Member')}</strong>
+                            <p>{new Date(booking.start_at).toLocaleString()} – {new Date(booking.end_at).toLocaleString()}</p>
+                          </div>
+                          <span className={`status-chip status-${booking.status}`}>{booking.status.replaceAll('_', ' ')}</span>
+                        </article>
+                      )) : <p className="empty-state">No bookings for this resource.</p>}
+                    </div>
+                    <div className="resource-detail-section">
+                      <h3>Condition reports</h3>
+                      {resourceDetails.condition_reports.length ? resourceDetails.condition_reports.map((report) => (
+                        <article className="condition-row" key={report.id}>
+                          <strong>{report.stage === 'return' ? 'Return condition' : 'Pickup condition'} · {report.author?.full_name || 'Member'}</strong>
+                          <p>{report.notes || 'No notes recorded.'}</p>
+                          <small>{new Date(report.created_at).toLocaleString()}</small>
+                        </article>
+                      )) : <p className="empty-state">No condition reports yet.</p>}
+                    </div>
+                    {resourceDetails.can_manage ? (
+                      <div className="card-actions">
+                        <button className="primary-btn" type="button" onClick={beginResourceEdit}>Edit resource details</button>
+                        <button className="secondary-btn" type="button" onClick={() => { setResourceDetails(null); setEditingResourceDetails(false) }}>Close</button>
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </>
+            )}
+          </section>
         </div>
       ) : null}
     </div>
