@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowUpRight, Bell, CalendarDays, Check, Clock3, Compass, Eye, FileText, ImagePlus, LayoutDashboard, LoaderCircle, LogOut, PackagePlus, Plus, RefreshCw, Save, ShieldCheck, Trash2, UserRound, X } from 'lucide-react'
 import './App.css'
 
 const apiBase = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`
 const categories = ['laboratory', 'IT', 'sports', 'facilities', 'event_equipment']
+let mutationInProgress = false
 
 function ResourcePhoto({ resource, onError }) {
   const [photoUrl, setPhotoUrl] = useState('')
@@ -24,22 +26,35 @@ function ResourcePhoto({ resource, onError }) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${apiBase}${path}`, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      ...(options.body && !(options.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers,
-    },
-  })
-  if (response.status === 204) return null
-  const body = await response.json()
-  if (!response.ok) {
-    const requestError = new Error(body.message || `Request failed (${response.status})`)
-    requestError.status = response.status
-    throw requestError
+  const isMutation = (options.method || 'GET').toUpperCase() !== 'GET'
+  if (isMutation && mutationInProgress) throw new Error('Please wait for the current update to finish.')
+  if (isMutation) {
+    mutationInProgress = true
+    window.dispatchEvent(new CustomEvent('campus-resource:mutation', { detail: true }))
   }
-  return body
+  try {
+    const response = await fetch(`${apiBase}${path}`, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        ...(options.body && !(options.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    })
+    if (response.status === 204) return null
+    const body = await response.json()
+    if (!response.ok) {
+      const requestError = new Error(body.message || `Request failed (${response.status})`)
+      requestError.status = response.status
+      throw requestError
+    }
+    return body
+  } finally {
+    if (isMutation) {
+      mutationInProgress = false
+      window.dispatchEvent(new CustomEvent('campus-resource:mutation', { detail: false }))
+    }
+  }
 }
 
 function localDateTime(hoursFromNow) {
@@ -55,16 +70,6 @@ function toLocalDateTime(value) {
   return date.toISOString().slice(0, 16)
 }
 
-function getErrorDetail(value) {
-  const detail = value instanceof Error ? value.message : typeof value === 'string' ? value : value?.message
-  if (!detail) return 'See the browser developer console for details.'
-  return String(detail)
-    .replace(/bearer\s+[\w.-]+/gi, 'Bearer [redacted]')
-    .replace(/\b(access_token|refresh_token|token|apikey|api_key|authorization)=([^&\s]+)/gi, '$1=[redacted]')
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email redacted]')
-    .slice(0, 240)
-}
-
 function App() {
   const [user, setUser] = useState(null)
   const [authMode, setAuthMode] = useState('login')
@@ -76,7 +81,8 @@ function App() {
   const [timeline, setTimeline] = useState([])
   const [dashboard, setDashboard] = useState(null)
   const [notifications, setNotifications] = useState([])
-  const [notificationFilter, setNotificationFilter] = useState('all')
+  const [notificationFilter, setNotificationFilter] = useState('unread')
+  const [showAllNotifications, setShowAllNotifications] = useState(false)
   const [adminUsers, setAdminUsers] = useState([])
   const [adminIncidents, setAdminIncidents] = useState([])
   const [adminTrainingCertifications, setAdminTrainingCertifications] = useState([])
@@ -95,6 +101,8 @@ function App() {
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState('resources')
   const [requestingResource, setRequestingResource] = useState(null)
+  const [bookingPreview, setBookingPreview] = useState(null)
+  const [actionPending, setActionPending] = useState(false)
   const [resourceDetails, setResourceDetails] = useState(null)
   const [resourceDetailsLoading, setResourceDetailsLoading] = useState(false)
   const [editingResourceDetails, setEditingResourceDetails] = useState(false)
@@ -107,7 +115,6 @@ function App() {
     allowed_departments: '', minimum_year: '', required_training: [], available_from: '', available_until: '',
   })
   const [incidentForm, setIncidentForm] = useState({ booking_id: '', resource_id: '', kind: 'damage', description: '' })
-  const lastConsoleError = useRef({ detail: '', timestamp: 0 })
   const isAdmin = user?.role === 'administrator'
   const canManageBooking = (booking) => isAdmin || booking.resources?.created_by === user?.id
   const canCompleteHandover = (booking) => (
@@ -115,6 +122,12 @@ function App() {
     || booking.resources?.created_by === user?.id
     || (booking.student_id === user?.id && booking.resources?.handover_mode === 'self_service')
   )
+
+  useEffect(() => {
+    const handleMutationState = (event) => setActionPending(event.detail)
+    window.addEventListener('campus-resource:mutation', handleMutationState)
+    return () => window.removeEventListener('campus-resource:mutation', handleMutationState)
+  }, [])
 
   useEffect(() => {
     if (!error && !message && !authMessage) return undefined
@@ -127,33 +140,6 @@ function App() {
 
     return () => window.clearTimeout(timeout)
   }, [authMessage, error, message])
-
-  useEffect(() => {
-    const reportBrowserError = (event) => {
-      setError(`Browser error: ${getErrorDetail(event.error || event.message)}`)
-    }
-    const reportUnhandledRejection = (event) => {
-      setError(`Unhandled browser promise rejection: ${getErrorDetail(event.reason)}`)
-    }
-    const originalConsoleError = console.error
-    console.error = (...args) => {
-      originalConsoleError.apply(console, args)
-      const detail = getErrorDetail(args[0])
-      const now = Date.now()
-      if (detail !== lastConsoleError.current.detail || now - lastConsoleError.current.timestamp > 3000) {
-        lastConsoleError.current = { detail, timestamp: now }
-        setError(`Console error: ${detail}`)
-      }
-    }
-    window.addEventListener('error', reportBrowserError)
-    window.addEventListener('unhandledrejection', reportUnhandledRejection)
-
-    return () => {
-      console.error = originalConsoleError
-      window.removeEventListener('error', reportBrowserError)
-      window.removeEventListener('unhandledrejection', reportUnhandledRejection)
-    }
-  }, [])
 
   const loadResources = useCallback(async () => {
     const params = new URLSearchParams()
@@ -306,10 +292,51 @@ function App() {
       .map((group) => ({ ...group, events: group.events.sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at)) }))
       .sort((a, b) => Date.parse(b.events.at(-1)?.occurred_at) - Date.parse(a.events.at(-1)?.occurred_at))
   }, [bookings, timeline])
-  const visibleNotifications = useMemo(
-    () => notificationFilter === 'unread' ? notifications.filter((item) => !item.read_at) : notifications,
-    [notificationFilter, notifications],
+  const unreadNotifications = useMemo(() => notifications.filter((item) => !item.read_at), [notifications])
+  const myListedResources = useMemo(
+    () => resources.filter((resource) => resource.created_by === user?.id),
+    [resources, user?.id],
   )
+  const sharedResources = useMemo(
+    () => resources.filter((resource) => resource.created_by !== user?.id),
+    [resources, user?.id],
+  )
+  const notificationSource = useMemo(
+    () => notificationFilter === 'unread' ? unreadNotifications : notifications,
+    [notificationFilter, notifications, unreadNotifications],
+  )
+  const visibleNotifications = useMemo(
+    () => showAllNotifications ? notificationSource : notificationSource.slice(0, 8),
+    [notificationSource, showAllNotifications],
+  )
+
+  function renderResourceCard(resource) {
+    const isMine = resource.created_by === user?.id
+    return (
+      <article className="resource-card" key={resource.id}>
+        <button className="resource-card-summary" type="button" onClick={() => openResourceDetails(resource.id)} aria-label={`View details for ${resource.name}`}>
+          <ResourcePhoto resource={resource} onError={setError} />
+          <div className="resource-card-top">
+            <span className="category-chip">{resource.category}</span>
+            <span className={`status-chip status-${resource.status}`}>{resource.status.replaceAll('_', ' ')}</span>
+          </div>
+          <h3>{resource.name}</h3>
+          <p className="resource-meta">{resource.asset_code} · {resource.location}</p>
+          {resource.institution ? <span className="resource-institution">{resource.institution}</span> : null}
+          <span className="resource-card-link">View details <ArrowUpRight size={15} aria-hidden="true" /></span>
+        </button>
+        <div className="card-actions">
+          {isMine ? <span className="listing-owner-label">Your listing</span> : <button className="primary-btn" type="button" onClick={() => setRequestingResource(resource)}><CalendarDays size={16} aria-hidden="true" /> Request</button>}
+          {isAdmin || isMine ? <label className="upload-btn"><ImagePlus size={16} aria-hidden="true" /> Photo<input aria-label={`Add photo for ${resource.name}`} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => uploadPhoto(resource.id, event.target.files?.[0])} /></label> : null}
+          {isAdmin || isMine ? (
+            <select aria-label={`Set ${resource.name} status`} value={resource.status} onChange={(event) => changeResourceStatus(resource, event.target.value)}>
+              {['available', 'reserved', 'in_use', 'under_maintenance', 'unavailable', 'retired'].map((status) => <option key={status} value={status}>{status.replaceAll('_', ' ')}</option>)}
+            </select>
+          ) : null}
+        </div>
+      </article>
+    )
+  }
 
   function renderBookingCard(booking, context) {
     const requesterName = booking.requester?.full_name
@@ -320,7 +347,10 @@ function App() {
       <article className="booking-card" key={booking.id}>
         <div className="booking-title">
           <div>
-            <h3>{booking.resources?.name || 'Campus resource'}</h3>
+            <button className="booking-preview-trigger" type="button" onClick={() => setBookingPreview(booking.resources)} aria-label={`View ${booking.resources?.name || 'resource'} details`}>
+              <h3>{booking.resources?.name || 'Campus resource'}</h3>
+              <Eye size={15} aria-hidden="true" />
+            </button>
             <p>{booking.resources?.asset_code} · {new Date(booking.start_at).toLocaleString()} to {new Date(booking.end_at).toLocaleString()}</p>
           </div>
           <span className={`status-chip status-${booking.status}`}>{booking.status.replaceAll('_', ' ')}</span>
@@ -332,8 +362,8 @@ function App() {
         <p>{booking.purpose}</p>
         <p className="helper-text">{booking.decision_reason}</p>
         <div className="card-actions">
-          {booking.status === 'confirmed' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'pickup')}>Record pickup</button> : null}
-          {booking.status === 'checked_out' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'return')}>Record return</button> : null}
+          {booking.status === 'confirmed' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'pickup')}><Check size={16} aria-hidden="true" /> Record pickup</button> : null}
+          {booking.status === 'checked_out' && canCompleteHandover(booking) ? <button className="secondary-btn" type="button" onClick={() => recordHandover(booking, 'return')}><Check size={16} aria-hidden="true" /> Record return</button> : null}
           {booking.status === 'checked_out'
             && !canCompleteHandover(booking)
             && booking.student_id === user?.id
@@ -445,7 +475,7 @@ function App() {
           institutional_ownership_confirmed: true,
         }),
       })
-      setMessage(`Resource ${response.data.asset_code} listed for college sharing.`)
+      setMessage(`Resource listed with asset ID ${response.data.asset_code}.`)
       setResourceForm({
         name: '', asset_code: '', description: '', category: 'IT', resource_type: 'equipment',
         location: '', department: '', institution: '', approval_mode: 'manual',
@@ -662,7 +692,7 @@ function App() {
         body: JSON.stringify({ status, reason }),
       })
       setAdminIncidents((current) => current.map((item) => item.id === incident.id ? { ...item, ...response.data } : item))
-      setMessage('Incident status updated and recorded in the audit log.')
+      setMessage('Incident status updated.')
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -746,7 +776,7 @@ function App() {
       })
       setTrainingCatalog((current) => [...current, response.data].sort((a, b) => a.title.localeCompare(b.title)))
       setTrainingCodeForm({ code: '', title: '', description: '' })
-      setMessage(`Approved training code ${response.data.code} added to the catalog.`)
+      setMessage(`Training code ${response.data.code} added.`)
     } catch (requestError) {
       setError(requestError.message)
     }
@@ -766,47 +796,54 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" onClickCapture={(event) => {
+      if (!actionPending) return
+      event.preventDefault()
+      event.stopPropagation()
+    }}>
       <header className="topbar">
         <div className="brand-block">
-          <span className="brand-mark">CR</span>
+          <span className="brand-mark"><LayoutDashboard size={22} strokeWidth={2.2} aria-hidden="true" /></span>
           <div>
             <p className="eyebrow">Campus Resource Intelligence</p>
-            <h1>Shared resource operations</h1>
+            <h1>Campus resource hub</h1>
           </div>
         </div>
         {user ? (
           <div className="user-controls">
-            <span className="user-badge">{user.full_name} · {isAdmin ? 'administrator' : 'member'}</span>
-            <button type="button" className="secondary-btn" onClick={signOut}>Sign out</button>
+            <button type="button" className="profile-shortcut" onClick={() => setActiveTab('profile')} aria-label={`Open profile for ${user.full_name}`}>
+              <span className="profile-avatar"><UserRound size={19} aria-hidden="true" /></span>
+              <span className="profile-shortcut-copy"><strong>{user.full_name}</strong><small>{isAdmin ? 'Administrator' : 'Verified member'}</small></span>
+            </button>
+            <button type="button" className="secondary-btn" onClick={signOut}><LogOut size={16} aria-hidden="true" /> Sign out</button>
           </div>
         ) : null}
       </header>
 
       {(error || message || authMessage) ? (
         <div className={`notice ${error ? 'notice-error' : ''}`} role={error ? 'alert' : 'status'} aria-live={error ? 'assertive' : 'polite'}>
-          {error ? <strong className="notice-label">Something needs your attention</strong> : null}
+          <span className="notice-icon" aria-hidden="true">{error ? <ShieldCheck size={18} /> : <Check size={18} />}</span>
           {error || message || authMessage}
-          <button type="button" aria-label="Dismiss message" onClick={() => { setError(''); setMessage(''); setAuthMessage('') }}>×</button>
+          <button type="button" aria-label="Dismiss message" onClick={() => { setError(''); setMessage(''); setAuthMessage('') }}><X size={18} /></button>
         </div>
       ) : null}
 
       {!user ? (
         <main className="welcome-grid">
           <section className="hero-copy">
-            <p className="badge">Participating-college resource sharing</p>
-            <h2>Make campus resources easier to find, request, and manage.</h2>
-            <p className="subtitle">Verified college members can list institution-owned resources, request resources, and record handovers. The backend enforces eligibility and booking rules.</p>
+            <p className="badge">For participating colleges</p>
+            <h2>Find the equipment and spaces your campus already has.</h2>
+            <p className="subtitle">Browse institution-owned resources, request a booking, and follow each pickup and return in one place.</p>
             <div className="feature-points">
-              <span>FairShare booking limits</span>
-              <span>Lister or administrator approval for restricted resources</span>
-              <span>Condition and audit history</span>
+              <span>Fair access with waitlists</span>
+              <span>Clear approval for restricted resources</span>
+              <span>Pickup, return, and condition history</span>
             </div>
           </section>
           <section className="auth-card">
             <div className="auth-tabs">
               <button type="button" className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Sign in</button>
-              <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Member registration</button>
+              <button type="button" className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Create account</button>
             </div>
             <form className="form-stack" onSubmit={submitAuth}>
               {authMode === 'register' ? (
@@ -818,8 +855,8 @@ function App() {
               ) : null}
               <label>College email<input required type="email" autoComplete="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} /></label>
               <label>Password<input required type="password" minLength="10" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} /></label>
-              <button className="primary-btn" type="submit">{authMode === 'login' ? 'Sign in' : 'Create member account'}</button>
-              {authMode === 'register' ? <p className="helper-text">Email verification is required. Members may both borrow resources and list institution-owned resources they are authorized to share.</p> : null}
+              <button className="primary-btn" type="submit"><UserRound size={16} aria-hidden="true" />{authMode === 'login' ? 'Sign in' : 'Create account'}</button>
+              {authMode === 'register' ? <p className="helper-text">Use your college email. You can borrow resources and list institution-owned items you’re authorized to share. Verify your email to finish registration.</p> : null}
             </form>
           </section>
         </main>
@@ -830,25 +867,30 @@ function App() {
             <div><strong>{dashboard?.active_bookings ?? '—'}</strong><span>your active bookings</span></div>
             <div><strong>{dashboard?.pending_requests ?? '—'}</strong><span>requests for your listings</span></div>
             {isAdmin ? <div><strong>{dashboard?.incidents_under_review ?? '—'}</strong><span>incidents to review</span></div> : null}
-            <div><strong>{notifications.filter((item) => !item.read_at).length}</strong><span>unread notifications</span></div>
           </section>
           <nav className="tab-bar" aria-label="Dashboard sections">
-            {['resources', 'bookings', 'timeline', 'manage', 'profile'].map((tab) => (
-              <button key={tab} type="button" className={activeTab === tab ? 'selected' : ''} onClick={() => setActiveTab(tab)}>
-                {tab[0].toUpperCase() + tab.slice(1)}
+            {[
+              { id: 'resources', label: 'Explore', icon: Compass },
+              { id: 'bookings', label: 'Bookings', icon: CalendarDays },
+              { id: 'timeline', label: 'Activity', icon: Clock3 },
+              { id: 'manage', label: 'My listings', icon: PackagePlus },
+              { id: 'profile', label: 'Profile', icon: UserRound },
+            ].map(({ id, label, icon: Icon }) => (
+              <button key={id} type="button" className={activeTab === id ? 'selected' : ''} onClick={() => setActiveTab(id)} aria-current={activeTab === id ? 'page' : undefined}>
+                <Icon size={17} aria-hidden="true" /> <span>{label}</span>{id === 'profile' && unreadNotifications.length > 0 ? <span className="nav-count" aria-label={`${unreadNotifications.length} unread updates`}>{unreadNotifications.length}</span> : null}
               </button>
             ))}
-            <button type="button" className="refresh-btn" onClick={refresh}>Refresh</button>
+            <button type="button" className="refresh-btn" onClick={refresh}><RefreshCw size={16} aria-hidden="true" /> Refresh</button>
           </nav>
 
           {activeTab === 'profile' ? (
             <section className="content-section">
               <div className="section-heading">
-                <div><p className="eyebrow">Your account</p><h2>Profile</h2></div>
+                <div><p className="eyebrow">Account details</p><h2><UserRound size={25} aria-hidden="true" /> Profile</h2></div>
               </div>
               <section className="profile-summary">
                 <div className="profile-summary-heading">
-                  <div><h3>{profileData?.profile.full_name}</h3><p>{profileData?.profile.email}</p></div>
+                  <div className="profile-identity"><span className="profile-avatar profile-avatar-large"><UserRound size={25} aria-hidden="true" /></span><div><h3>{profileData?.profile.full_name}</h3><p>{profileData?.profile.email}</p></div></div>
                   <span className={`status-chip status-${profileData?.profile.account_status}`}>{profileData?.profile.account_status}</span>
                 </div>
                 <dl className="profile-facts">
@@ -862,10 +904,10 @@ function App() {
 
               <section className="profile-certifications">
                 <div className="booking-group-heading">
-                  <div><p className="eyebrow">Approved training catalog</p><h3>My certifications</h3></div>
+                  <div><p className="eyebrow">Approved training list</p><h3>My certifications</h3></div>
                   <span>{profileData?.certifications.length ?? 0}</span>
                 </div>
-                <p className="helper-text">Select an approved code and upload proof. A certification only satisfies resource eligibility after an administrator verifies the document.</p>
+                <p className="helper-text">Upload proof of training. An administrator must approve it before it can meet a resource’s eligibility rules.</p>
                 <form className="form-stack certificate-form" onSubmit={submitTrainingCertificate}>
                   <label>Training code
                     <select required value={certificateCode} onChange={(event) => setCertificateCode(event.target.value)}>
@@ -898,7 +940,7 @@ function App() {
                       }}
                     />
                   </label>
-                  <button className="primary-btn" type="submit" disabled={!trainingCatalog.some((item) => item.active)}>Submit for verification</button>
+                  <button className="primary-btn" type="submit" disabled={!trainingCatalog.some((item) => item.active)}><FileText size={16} aria-hidden="true" /> Submit for verification</button>
                 </form>
                 {profileData?.certifications.length ? (
                   <div className="certification-list">
@@ -906,14 +948,14 @@ function App() {
                       <article className="certification-row" key={certification.id}>
                         <div>
                           <strong>{certification.training_code} · {certification.training_catalog?.title}</strong>
-                          {!certification.training_catalog?.active ? <small>This training code is inactive and does not currently count toward eligibility.</small> : null}
+                          {!certification.training_catalog?.active ? <small>This code is inactive and can’t be used to meet resource requirements.</small> : null}
                           <p>Submitted {new Date(certification.created_at).toLocaleString()}</p>
                           {certification.review_reason ? <small>{certification.review_reason}</small> : null}
                         </div>
                         <span className={`status-chip status-${certification.status}`}>{certification.status}</span>
                         <div className="card-actions">
-                          <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}>View document</button>
-                          <button className="reject-btn" type="button" onClick={() => removeTrainingCertificate(certification)}>Remove</button>
+                          <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}><Eye size={16} aria-hidden="true" /> View document</button>
+                          <button className="reject-btn" type="button" onClick={() => removeTrainingCertificate(certification)}><Trash2 size={16} aria-hidden="true" /> Remove</button>
                         </div>
                       </article>
                     ))}
@@ -926,7 +968,7 @@ function App() {
           {activeTab === 'resources' ? (
             <section className="content-section">
               <div className="section-heading">
-                <div><p className="eyebrow">Find equipment and spaces</p><h2>Resource catalogue</h2></div>
+                <div><p className="eyebrow">Find equipment and spaces</p><h2>Browse resources</h2></div>
                 <div className="filters">
                   <input aria-label="Search resources" placeholder="Search resources" value={query} onChange={(event) => setQuery(event.target.value)} />
                   <select aria-label="Filter by category" value={category} onChange={(event) => setCategory(event.target.value)}>
@@ -938,44 +980,33 @@ function App() {
                     <option value="">All types</option>
                     {['equipment', 'space', 'facility'].map((item) => <option key={item}>{item}</option>)}
                   </select>
-                  <label className="date-filter">Available from<input aria-label="Available from" type="datetime-local" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label>
-                  <label className="date-filter">Available until<input aria-label="Available until" type="datetime-local" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label>
+                  <div className="date-filter-row">
+                    <label className="date-filter">Available from<input aria-label="Available from" type="datetime-local" value={availabilityStart} onChange={(event) => setAvailabilityStart(event.target.value)} /></label>
+                    <label className="date-filter">Available until<input aria-label="Available until" type="datetime-local" value={availabilityEnd} onChange={(event) => setAvailabilityEnd(event.target.value)} /></label>
+                  </div>
                 </div>
               </div>
-              {resources.length ? (
-                <div className="resource-grid">
-                  {resources.map((resource) => (
-                    <article className="resource-card" key={resource.id}>
-                      <ResourcePhoto resource={resource} onError={setError} />
-                      <div className="resource-card-top"><span className="category-chip">{resource.category}</span><span className={`status-chip status-${resource.status}`}>{resource.status.replaceAll('_', ' ')}</span></div>
-                      <h3>{resource.name}</h3>
-                      <p className="resource-meta">{resource.asset_code} · {resource.location}</p>
-                      <p>{resource.description || 'No description supplied.'}</p>
-                      <div className="resource-rules">
-                        <span>{resource.approval_mode === 'manual' ? 'Lister/admin approval' : 'Automatic approval'}</span>
-                        <span>{resource.handover_mode.replaceAll('_', ' ')}</span>
-                        {resource.restricted ? <span>Restricted access</span> : null}
+              <div className="resource-categories">
+                  <section className="resource-category-section">
+                    <div className="resource-category-heading">
+                      <div><p className="eyebrow">Your inventory</p><h3>Your listings</h3></div>
+                      <span>{myListedResources.length}</span>
+                    </div>
+                    {myListedResources.length ? <div className="resource-grid">{myListedResources.map(renderResourceCard)}</div> : (
+                      <div className="resource-category-empty">
+                        <p>You haven’t listed a resource yet.</p>
+                        <button className="secondary-btn" type="button" onClick={() => setActiveTab('manage')}><Plus size={16} aria-hidden="true" /> List a resource</button>
                       </div>
-                      {resource.eligibility_rules?.allowed_departments?.length ? <p className="helper-text">Eligible departments: {resource.eligibility_rules.allowed_departments.join(', ')}</p> : null}
-                      {resource.eligibility_rules?.minimum_year ? <p className="helper-text">Minimum study year: {resource.eligibility_rules.minimum_year}</p> : null}
-                      {resource.eligibility_rules?.required_training?.length ? <p className="helper-text">Required training: {resource.eligibility_rules.required_training.join(', ')}</p> : null}
-                      {resource.usage_terms ? <p className="helper-text">{resource.usage_terms}</p> : null}
-                      <div className="card-actions">
-                        <button className="secondary-btn" type="button" onClick={() => openResourceDetails(resource.id)}>Resource details</button>
-                        {resource.created_by === user?.id
-                          ? <span className="helper-text">Your listing</span>
-                          : <button className="primary-btn" type="button" onClick={() => setRequestingResource(resource)}>Request resource</button>}
-                        {isAdmin || resource.created_by === user?.id ? <label className="upload-btn">Add photo<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => uploadPhoto(resource.id, event.target.files?.[0])} /></label> : null}
-                        {isAdmin || resource.created_by === user?.id ? (
-                          <select aria-label={`Set ${resource.name} status`} value={resource.status} onChange={(event) => changeResourceStatus(resource, event.target.value)}>
-                            {['available', 'reserved', 'in_use', 'under_maintenance', 'unavailable', 'retired'].map((status) => <option key={status} value={status}>{status.replaceAll('_', ' ')}</option>)}
-                          </select>
-                        ) : null}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              ) : <p className="empty-state">No resources match this search. Members can list institution-owned resources they are authorized to share.</p>}
+                    )}
+                  </section>
+                  <section className="resource-category-section shared-category">
+                    <div className="resource-category-heading">
+                      <div><p className="eyebrow">Available across campus</p><h3>Shared by others</h3></div>
+                      <span>{sharedResources.length}</span>
+                    </div>
+                    {sharedResources.length ? <div className="resource-grid">{sharedResources.map(renderResourceCard)}</div> : <p className="resource-category-empty">{resources.length ? 'No shared resources match these filters.' : 'No resources are available to borrow yet.'}</p>}
+                  </section>
+              </div>
             </section>
           ) : null}
 
@@ -988,7 +1019,7 @@ function App() {
                   {pendingBookings.filter(canManageBooking).map((booking) => (
                     <div className="approval-row" key={booking.id}>
                       <span>{booking.resources?.name || 'Resource'} · Requested by {booking.requester?.full_name || 'Member'} · {new Date(booking.start_at).toLocaleString()} — {booking.purpose}</span>
-                      <div><button className="approve-btn" type="button" onClick={() => decideBooking(booking.id, true)}>Approve</button><button className="reject-btn" type="button" onClick={() => decideBooking(booking.id, false)}>Reject</button></div>
+                      <div><button className="approve-btn" type="button" onClick={() => decideBooking(booking.id, true)}><Check size={16} aria-hidden="true" /> Approve</button><button className="reject-btn" type="button" onClick={() => decideBooking(booking.id, false)}><X size={16} aria-hidden="true" /> Reject</button></div>
                     </div>
                   ))}
                 </div>
@@ -1009,10 +1040,10 @@ function App() {
               </section>
               {isAdmin ? (
                 <section className="booking-group">
-                  <div className="booking-group-heading"><h3>Other platform bookings</h3><span>{otherAdminBookings.length}</span></div>
+                  <div className="booking-group-heading"><h3>Bookings across campus</h3><span>{otherAdminBookings.length}</span></div>
                   <div className="booking-list">
                     {otherAdminBookings.map((booking) => renderBookingCard(booking, 'admin'))}
-                    {!otherAdminBookings.length ? <p className="empty-state">No other platform bookings.</p> : null}
+                    {!otherAdminBookings.length ? <p className="empty-state">No additional bookings.</p> : null}
                   </div>
                 </section>
               ) : null}
@@ -1039,7 +1070,7 @@ function App() {
 
           {activeTab === 'timeline' ? (
             <section className="content-section">
-              <div className="section-heading"><div><p className="eyebrow">Grouped by resource and booking</p><h2>Transaction timelines</h2></div></div>
+              <div className="section-heading"><div><p className="eyebrow">Booking, pickup, and return history</p><h2>Activity</h2></div></div>
               <div className="resource-timelines">
                 {timelineGroups.map((group) => (
                   <section className="resource-timeline" key={group.id}>
@@ -1065,34 +1096,39 @@ function App() {
               </div>
               <div className="notification-list">
                 <div className="notification-heading">
-                  <div><p className="eyebrow">Updates for your account</p><h3>Notifications</h3></div>
-                  <span>{notifications.filter((item) => !item.read_at).length} unread</span>
+                  <div><p className="eyebrow">Booking and account updates</p><h3><Bell size={19} aria-hidden="true" /> Updates</h3></div>
+                  <span>{unreadNotifications.length} unread</span>
                 </div>
                 <div className="notification-filters" aria-label="Filter notifications">
-                  {['all', 'unread'].map((filter) => (
+                  {['unread', 'all'].map((filter) => (
                     <button
                       type="button"
                       key={filter}
                       className={notificationFilter === filter ? 'selected' : ''}
                       onClick={() => setNotificationFilter(filter)}
                     >
-                      {filter === 'all' ? `All (${notifications.length})` : `Unread (${notifications.filter((item) => !item.read_at).length})`}
+                      {filter === 'all' ? `Recent (${Math.min(notifications.length, 8)})` : `Unread (${unreadNotifications.length})`}
                     </button>
                   ))}
                 </div>
                 {visibleNotifications.length ? visibleNotifications.map((notification) => (
                   <article className={notification.read_at ? 'notification read' : 'notification'} key={notification.id}>
                     <div>
-                      <span className={`notification-state ${notification.read_at ? 'is-read' : 'is-unread'}`}>{notification.read_at ? 'Read' : 'Unread'}</span>
+                      <span className={`notification-state ${notification.read_at ? 'is-read' : 'is-unread'}`}><Bell size={13} aria-hidden="true" /> {notification.read_at ? 'Read' : 'New update'}</span>
                       <strong>{notification.title}</strong>
                       <p>{notification.message}</p>
                       <time>{new Date(notification.created_at).toLocaleString()}</time>
                     </div>
                     <button type="button" onClick={() => toggleNotificationRead(notification)}>
-                      Mark {notification.read_at ? 'unread' : 'read'}
+                      {notification.read_at ? <Bell size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />} {notification.read_at ? 'Mark unread' : 'Mark read'}
                     </button>
                   </article>
                 )) : <p className="empty-state">{notificationFilter === 'unread' ? 'You’re all caught up.' : 'No notifications yet.'}</p>}
+                {notificationSource.length > 8 ? (
+                  <button className="notification-more" type="button" onClick={() => setShowAllNotifications((current) => !current)}>
+                    {showAllNotifications ? 'Show fewer' : `Show all ${notificationSource.length}`}
+                  </button>
+                ) : null}
               </div>
             </section>
           ) : null}
@@ -1117,7 +1153,7 @@ function App() {
                             </div>
                             <div className="my-listing-actions">
                               <span className={`status-chip status-${resource.status}`}>{resource.status.replaceAll('_', ' ')}</span>
-                              <button type="button" className="secondary-btn" onClick={() => openResourceDetails(resource.id)}>Details & manage</button>
+                              <button type="button" className="secondary-btn" onClick={() => openResourceDetails(resource.id)}><FileText size={16} aria-hidden="true" /> Details & manage</button>
                             </div>
                           </article>
                         )
@@ -1129,7 +1165,7 @@ function App() {
                 <form className="form-stack resource-form" onSubmit={createResource}>
                   <label className="check-label"><input required type="checkbox" /> I confirm this resource is institution-owned and I am authorized to list it.</label>
                   <label>Name<input required value={resourceForm.name} onChange={(event) => setResourceForm({ ...resourceForm, name: event.target.value })} /></label>
-                  <label>Asset code<input value={resourceForm.asset_code} onChange={(event) => setResourceForm({ ...resourceForm, asset_code: event.target.value })} placeholder="Generated if blank" /></label>
+                  <label>Asset code<input value={resourceForm.asset_code} onChange={(event) => setResourceForm({ ...resourceForm, asset_code: event.target.value })} placeholder="Leave blank to assign one" /></label>
                   <label>Description<textarea value={resourceForm.description} onChange={(event) => setResourceForm({ ...resourceForm, description: event.target.value })} /></label>
                   <div className="form-row">
                     <label>Category<select value={resourceForm.category} onChange={(event) => setResourceForm({ ...resourceForm, category: event.target.value })}>{categories.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -1139,8 +1175,8 @@ function App() {
                   <div className="form-row"><label>Department<input required value={resourceForm.department} onChange={(event) => setResourceForm({ ...resourceForm, department: event.target.value })} /></label><label>Institution<input required value={resourceForm.institution} onChange={(event) => setResourceForm({ ...resourceForm, institution: event.target.value })} /></label></div>
                   <div className="form-row"><label>Request window begins<input type="datetime-local" value={resourceForm.available_from} onChange={(event) => setResourceForm({ ...resourceForm, available_from: event.target.value })} /></label><label>Request window ends<input type="datetime-local" value={resourceForm.available_until} onChange={(event) => setResourceForm({ ...resourceForm, available_until: event.target.value })} /></label></div>
                   <div className="form-row">
-                    <label>Approval<select value={resourceForm.approval_mode} onChange={(event) => setResourceForm({ ...resourceForm, approval_mode: event.target.value })}><option value="manual">Manual approval</option><option value="auto" disabled={resourceForm.restricted}>Automatic (low risk)</option></select></label>
-                    <label>Handover<select value={resourceForm.handover_mode} onChange={(event) => setResourceForm({ ...resourceForm, handover_mode: event.target.value })}><option value="staff_attended">Lister attended</option><option value="self_service" disabled={resourceForm.restricted}>Self service</option></select></label>
+                    <label>Approval<select value={resourceForm.approval_mode} onChange={(event) => setResourceForm({ ...resourceForm, approval_mode: event.target.value })}><option value="manual">Owner approval</option><option value="auto" disabled={resourceForm.restricted}>Automatic approval</option></select></label>
+                    <label>Handover<select value={resourceForm.handover_mode} onChange={(event) => setResourceForm({ ...resourceForm, handover_mode: event.target.value })}><option value="staff_attended">Owner present</option><option value="self_service" disabled={resourceForm.restricted}>Self-service</option></select></label>
                   </div>
                   <label className="check-label"><input type="checkbox" checked={resourceForm.restricted} onChange={(event) => setResourceForm({
                     ...resourceForm,
@@ -1169,20 +1205,19 @@ function App() {
                         {item.code} — {item.title}
                       </label>
                     ))}
-                    {!trainingCatalog.some((item) => item.active) ? <p className="helper-text">There are no approved training codes in the catalog.</p> : null}
+                    {!trainingCatalog.some((item) => item.active) ? <p className="helper-text">No approved training codes are available yet.</p> : null}
                   </fieldset>
                   <label>Usage terms<input value={resourceForm.usage_terms} onChange={(event) => setResourceForm({ ...resourceForm, usage_terms: event.target.value })} /></label>
-                  <button className="primary-btn" type="submit">List resource</button>
+                  <button className="primary-btn" type="submit"><Plus size={16} aria-hidden="true" /> List resource</button>
                 </form>
               </div>
               <aside className="side-panel">
-                <h3>Operational safeguards</h3>
+                <h3>Listing rules</h3>
                 <ul>
-                  <li>Members manage only the resources they listed; administrators can manage all resources.</li>
-                  <li>Personal belongings cannot be listed. Confirm the resource is institution-owned.</li>
-                  <li>Restricted resources cannot use automatic approval.</li>
-                  <li>Overlapping confirmed bookings are rejected transactionally.</li>
-                  <li>Incident reports do not assign fault or penalties.</li>
+                  <li>List college-owned resources only, and only when you’re authorized to share them.</li>
+                  <li>Restricted resources require approval and an attended handover.</li>
+                  <li>Booking dates can’t overlap for the same resource.</li>
+                  <li>An administrator reviews reported damage or loss.</li>
                 </ul>
                 {isAdmin ? (
                   <>
@@ -1210,16 +1245,16 @@ function App() {
                             <small>Submitted {new Date(certification.created_at).toLocaleString()}</small>
                           </div>
                           <div className="card-actions">
-                            <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}>Review document</button>
-                            <button className="approve-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'approved')}>Approve</button>
-                            <button className="reject-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'rejected')}>Reject</button>
+                            <button className="secondary-btn" type="button" onClick={() => openTrainingDocument(certification.id)}><Eye size={16} aria-hidden="true" /> Review document</button>
+                            <button className="approve-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'approved')}><Check size={16} aria-hidden="true" /> Approve</button>
+                            <button className="reject-btn" type="button" onClick={() => reviewTrainingCertification(certification, 'rejected')}><X size={16} aria-hidden="true" /> Reject</button>
                           </div>
                         </article>
                       ))}
                       {!adminTrainingCertifications.length ? <p className="empty-state">No training certificates are waiting for review.</p> : null}
                     </div>
-                    <h3>Approved training-code catalog</h3>
-                    <p className="helper-text">Members can choose active codes only. The initial migration entries are samples; confirm them against your college's approved training list.</p>
+                    <h3>Training codes</h3>
+                    <p className="helper-text">Members can choose active codes. Add the training codes approved by your college.</p>
                     <form className="form-stack training-code-admin-form" onSubmit={addTrainingCode}>
                       <label>Code<input required pattern="[A-Za-z0-9][A-Za-z0-9._-]{1,39}" value={trainingCodeForm.code} onChange={(event) => setTrainingCodeForm({ ...trainingCodeForm, code: event.target.value })} placeholder="e.g. LASER-SAFETY-101" /></label>
                       <label>Title<input required minLength="2" maxLength="120" value={trainingCodeForm.title} onChange={(event) => setTrainingCodeForm({ ...trainingCodeForm, title: event.target.value })} /></label>
@@ -1248,7 +1283,7 @@ function App() {
                       {!adminIncidents.length ? <p className="empty-state">No incidents to review.</p> : null}
                     </div>
                     <h3>Audit history</h3>
-                    <a className="text-link" href={`${apiBase}/audit`} target="_blank" rel="noreferrer">Open authorized audit endpoint</a>
+                    <a className="text-link" href={`${apiBase}/audit`} target="_blank" rel="noreferrer">View audit history</a>
                   </>
                 ) : null}
               </aside>
@@ -1264,11 +1299,11 @@ function App() {
             <p className="eyebrow">Booking request</p>
             <h2>{requestingResource.name}</h2>
             <p>{requestingResource.usage_terms || requestingResource.description || 'Review the eligibility and usage requirements before submitting.'}</p>
-            {requestingResource.restricted ? <p className="restricted-note">This resource requires approval from its lister or an administrator and attended handover.</p> : null}
+            {requestingResource.restricted ? <p className="restricted-note">This resource requires owner or administrator approval and an attended handover.</p> : null}
             <label>Start<input required type="datetime-local" value={requestForm.start_at} onChange={(event) => setRequestForm({ ...requestForm, start_at: event.target.value })} /></label>
             <label>End<input required type="datetime-local" value={requestForm.end_at} onChange={(event) => setRequestForm({ ...requestForm, end_at: event.target.value })} /></label>
             <label>Purpose<textarea required minLength="3" value={requestForm.purpose} onChange={(event) => setRequestForm({ ...requestForm, purpose: event.target.value })} /></label>
-            <button className="primary-btn" type="submit">Submit request</button>
+              <button className="primary-btn" type="submit"><CalendarDays size={16} aria-hidden="true" /> Submit request</button>
           </form>
         </div>
       ) : null}
@@ -1333,7 +1368,7 @@ function App() {
                         ...trainingCatalog,
                         ...resourceEditForm.required_training
                           .filter((code) => !trainingCatalog.some((item) => item.code === code))
-                          .map((code) => ({ code, title: 'Legacy code not in approved catalog', active: false })),
+                          .map((code) => ({ code, title: 'Not in the training list', active: false })),
                       ].map((item) => (
                         <label className="check-label" key={item.code}>
                           <input
@@ -1349,7 +1384,7 @@ function App() {
                           {item.code} — {item.title}{item.active ? '' : ' (inactive)'}
                         </label>
                       ))}
-                      {!trainingCatalog.length ? <p className="helper-text">No catalog codes are available.</p> : null}
+                      {!trainingCatalog.length ? <p className="helper-text">No training codes are available yet.</p> : null}
                     </fieldset>
                     <label>Usage and condition terms<textarea value={resourceEditForm.usage_terms} onChange={(event) => setResourceEditForm({ ...resourceEditForm, usage_terms: event.target.value })} /></label>
                     <label className="check-label"><input type="checkbox" checked={resourceEditForm.restricted} onChange={(event) => setResourceEditForm({
@@ -1363,10 +1398,10 @@ function App() {
                       high_value: event.target.checked,
                       handover_mode: event.target.checked ? 'staff_attended' : resourceEditForm.handover_mode,
                     })} /> High-value resource (attended handover)</label>
-                    <label>Handover<select value={resourceEditForm.handover_mode} onChange={(event) => setResourceEditForm({ ...resourceEditForm, handover_mode: event.target.value })}><option value="staff_attended">Lister attended</option><option value="self_service" disabled={resourceEditForm.restricted || resourceEditForm.high_value}>Self service</option></select></label>
+                    <label>Handover<select value={resourceEditForm.handover_mode} onChange={(event) => setResourceEditForm({ ...resourceEditForm, handover_mode: event.target.value })}><option value="staff_attended">Owner present</option><option value="self_service" disabled={resourceEditForm.restricted || resourceEditForm.high_value}>Self-service</option></select></label>
                     <label className="check-label"><input type="checkbox" checked={resourceEditForm.active} onChange={(event) => setResourceEditForm({ ...resourceEditForm, active: event.target.checked })} /> Active listing</label>
                     <div className="card-actions">
-                      <button className="primary-btn" type="submit">Save resource details</button>
+                      <button className="primary-btn" type="submit"><Save size={16} aria-hidden="true" /> Save resource details</button>
                       <button className="secondary-btn" type="button" onClick={() => setEditingResourceDetails(false)}>Cancel</button>
                     </div>
                   </form>
@@ -1387,7 +1422,7 @@ function App() {
                         Returned early on {new Date(resourceDetails.recent_return.returned_at).toLocaleString()}. The resource is available now; you can review and approve overlapping waitlist requests below.
                       </p>
                     ) : null}
-                    <p className="resource-detail-description">{resourceDetails.resource.description || 'No description supplied.'}</p>
+                    <p className="resource-detail-description">{resourceDetails.resource.description || 'No description provided.'}</p>
                     <p className="resource-detail-description">{resourceDetails.resource.usage_terms || 'No additional usage terms supplied.'}</p>
                     {resourceDetails.can_manage ? (
                       <div className="resource-detail-section">
@@ -1440,6 +1475,27 @@ function App() {
           </section>
         </div>
       ) : null}
+
+      {bookingPreview ? (
+        <div className="modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setBookingPreview(null) }}>
+          <section className="booking-preview-modal" role="dialog" aria-modal="true" aria-labelledby="booking-preview-title">
+            <button className="modal-close" type="button" aria-label="Close resource preview" onClick={() => setBookingPreview(null)}><X size={19} /></button>
+            <ResourcePhoto resource={bookingPreview} onError={setError} />
+            <div className="resource-card-top"><span className="category-chip">{bookingPreview.category}</span><span className={`status-chip status-${bookingPreview.status}`}>{bookingPreview.status?.replaceAll('_', ' ')}</span></div>
+            <h2 id="booking-preview-title">{bookingPreview.name}</h2>
+            <p className="resource-meta">{bookingPreview.asset_code} · {bookingPreview.location}</p>
+            <p>{bookingPreview.description || 'No description provided.'}</p>
+            <dl className="booking-preview-facts">
+              <div><dt>Listed by</dt><dd>{bookingPreview.lister?.full_name || 'Campus member'}</dd></div>
+              <div><dt>Institution</dt><dd>{bookingPreview.institution || 'Not provided'}</dd></div>
+              <div><dt>Condition</dt><dd>{bookingPreview.condition || 'Not reported'}</dd></div>
+            </dl>
+            <button className="secondary-btn" type="button" onClick={() => { setBookingPreview(null); openResourceDetails(bookingPreview.id) }}><FileText size={16} aria-hidden="true" /> View full details</button>
+          </section>
+        </div>
+      ) : null}
+
+      {actionPending ? <div className="action-pending-overlay" role="status" aria-live="polite"><span className="action-pending-message"><LoaderCircle size={18} className="action-spinner" aria-hidden="true" /> Saving your update…</span></div> : null}
     </div>
   )
 }

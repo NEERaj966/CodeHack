@@ -1,47 +1,37 @@
-:root {
-  font-family: Inter, 'Segoe UI', sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #e2e8f0;
-  background: #020817;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  color-scheme: dark;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
-}
+@layer base {
+  :root {
+    color-scheme: light;
+    --color-canvas: #F1F4EF;
+    --color-ink: #23342D;
+    --color-sage: #81917F;
+    --color-amber: #C67948;
+    --color-muted: #718078;
+    --color-line: #E1E5DF;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    background: var(--color-canvas);
+  }
 
-html {
-  scroll-behavior: smooth;
-}
+  body {
+    @apply m-0 min-h-screen bg-canvas text-ink antialiased;
+    background-image: radial-gradient(ellipse 55% 34% at 92% 0%, rgb(129 145 127 / 9%), transparent 82%);
+    background-attachment: fixed;
+  }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at top, rgba(45, 212, 191, 0.2), transparent 30%),
-    linear-gradient(180deg, #020817 0%, #0f172a 100%);
-}
+  #root {
+    min-height: 100vh;
+  }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
+  button, input, select, textarea {
+    font: inherit;
+  }
 
-#root {
-  min-height: 100vh;
-}
-
-h1,
-h2,
-h3,
-p {
-  margin: 0;
+  button {
+    @apply transition-colors duration-150;
+  }
 }
